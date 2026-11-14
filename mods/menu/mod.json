@@ -1,9 +1,9 @@
 {
   "id": "menu",
-  "name": "Menu Hook",
-  "version": "2.0",
+  "name": "Menu Framework",
+  "version": "3.0",
   "type": "preload",
   "so": "hook_menu.so",
-  "description": "LD_PRELOAD interposition on MxBindableAbstractMenu_Reload to inject custom menu items",
+  "description": "Menu injection framework. Provides natartos_menu_register() API — app mods register their own entries.",
   "menu": null
 }

@@ -1,11 +1,11 @@
 /*
- * hook_debug.so — popen redirect for debug scripts on DJI Goggles 3.
+ * hook_popen.so — popen redirect for DJI Goggles 3.
  *
  * Intercepts popen("./bin/debug_script_*") and redirects to
- * /data/local/tmp/debug_script_* if the target exists and is executable.
+ * /data/local/tmp/debug_script_*. Required for Doom and Stream (fb_override).
  */
 
-#define NTLOG_PREFIX "debug"
+#define NTLOG_PREFIX "popen"
 #include "natartos_common.h"
 
 #define my_strlen       natartos_strlen
@@ -47,7 +47,20 @@ void *popen(const char *command, const char *type) {
 
 __attribute__((constructor))
 static void init_hook(void) {
-    NTLOG("hook_debug loaded");
+    char exe[64];
+    int fd = (int)sys_openat(AT_FDCWD, "/proc/self/cmdline", O_RDONLY, 0);
+    if (fd >= 0) {
+        long r = sys_read(fd, exe, sizeof(exe) - 1);
+        sys_close(fd);
+        if (r > 0) {
+            exe[r] = 0;
+            for (int i = 0; i + 11 <= r; i++)
+                if (natartos_strncmp(exe + i, "dji_glasses", 11) == 0) {
+                    NTLOG("hook_popen loaded");
+                    return;
+                }
+        }
+    }
 }
 
 int natartos_mod_init(void *(*loader_dlsym)(void *, const char *)) {

@@ -16,18 +16,18 @@ make -f Makefile.goggles
 
 | Path | What |
 |------|------|
-| `/data/local/tmp/doom_goggles` | binary (1.26 MB) |
-| `/data/local/tmp/freedoom1.wad` | Freedoom 0.13.0 IWAD (28 MB) |
+| `/vendor/natartos/apps/doom/doom_goggles` | binary (1.26 MB) |
+| `/vendor/natartos/apps/doom/freedoom1.wad` | Freedoom 0.13.0 IWAD (28 MB) |
 
 ## How it works
 
 - `doomgeneric_goggles.c` — platform shim (5 callbacks)
 - Renders 320×200, scaled 5× → 1600×1000 centered in `/data/local/tmp/fb_shared` (BGRA 1920×1080)
-- hook_debug.so reads fb_shared and pushes it to the display via a DMA-buf override
+- hook_popen.so reads fb_shared and pushes it to the display via a DMA-buf override
 - Input: `/dev/input/event0` (gpio_keys) + `/dev/input/event3` (omc_keys)
 - UP/DOWN/LEFT/RIGHT = navigation, CENTER = fire/enter, BACK = esc
 
 ## Dependencies
 
-- `hook_debug.so` with the fb_override inject thread
+- `hook_popen.so` with the fb_override inject thread
 - The fb_override flag must be enabled

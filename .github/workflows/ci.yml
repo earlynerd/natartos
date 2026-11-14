@@ -25,30 +25,55 @@ jobs:
         run: |
           CC="aarch64-linux-gnu-gcc"
           CFLAGS="-shared -fPIC -O2 -fno-builtin -nostdlib"
-          for src in mods/*/mod.c; do
-            dir=$(basename $(dirname "$src"))
-            if [ -f "mods/$dir/mod.json" ]; then
-              if grep -q '"so".*null' "mods/$dir/mod.json"; then
-                echo "[skip] $dir (so=null)"; continue
-              fi
-              so=$(grep '"so"' "mods/$dir/mod.json" | head -1 | sed 's/.*"so"[^"]*"\([^"]*\)".*/\1/')
+          for dir in mods/*/; do
+            dir=$(basename "$dir")
+            [ ! -f "mods/$dir/mod.json" ] && continue
+            if grep -q '"so".*null' "mods/$dir/mod.json"; then
+              echo "[skip] $dir (so=null)"; continue
             fi
+            so=$(grep '"so"' "mods/$dir/mod.json" | head -1 | sed 's/.*"so"[^"]*"\([^"]*\)".*/\1/')
             [ -z "$so" ] && so="${dir}.so"
-            $CC $CFLAGS -I include -I mods -Wl,-soname,$so -o "dist/$so" "$src"
+            srcfile=$(grep '"source"' "mods/$dir/mod.json" 2>/dev/null | head -1 | sed 's/.*"source"[^"]*"\([^"]*\)".*/\1/')
+            [ -z "$srcfile" ] && srcfile="mod.c"
+            if [ ! -f "mods/$dir/$srcfile" ]; then
+              echo "[skip] $dir (no $srcfile)"; continue
+            fi
+            $CC $CFLAGS -I include -I mods -Wl,-soname,$so -o "dist/$so" "mods/$dir/$srcfile"
             echo "[natartos] $so ($(stat -c%s "dist/$so") bytes)"
-            so=
           done
+
+      - name: Build fb_receiver
+        run: aarch64-linux-gnu-gcc -static -O2 -I include -o dist/fb_receiver mods/stream/fb_receiver.c -lm
+
+      - name: Build doom_goggles
+        run: |
+          apt-get install -y -qq git make >/dev/null 2>&1
+          git clone --depth 1 https://github.com/ozkl/doomgeneric.git /tmp/doomgeneric
+          cp mods/doom/doomgeneric_goggles.c /tmp/doomgeneric/doomgeneric/
+          cp mods/doom/Makefile.goggles /tmp/doomgeneric/doomgeneric/
+          cd /tmp/doomgeneric/doomgeneric
+          make -f Makefile.goggles
+          cp doom_goggles $GITHUB_WORKSPACE/dist/
+          chmod 755 $GITHUB_WORKSPACE/dist/doom_goggles
+
+      - name: Build dm_noverity
+        run: aarch64-linux-gnu-gcc -static -O2 -o dist/dm_noverity tools/dm_noverity.c
 
       - name: Collect dist
         run: |
           mkdir -p dist
           cp src/natartos_loader.so dist/
           cp deploy/inject.sh dist/
-          cp deploy/adb_persist.sh dist/
-          cp deploy/natartos.rc dist/
           chmod 644 dist/*.so
+          chmod 755 dist/doom_goggles dist/fb_receiver dist/dm_noverity
+          # icons + apps
+          if [ -d assets/icons ]; then mkdir -p dist/icons && cp assets/icons/*.rgba dist/icons/ 2>/dev/null || true; fi
+          if [ -d assets/apps ]; then cp -r assets/apps dist/apps; fi
+          # put pre-built doom binary next to WAD
+          mkdir -p dist/apps/doom
+          cp dist/doom_goggles dist/apps/doom/ 2>/dev/null || true
           cd dist
-          sha256sum *.so inject.sh adb_persist.sh natartos.rc > SHA256SUMS
+          sha256sum *.so inject.sh dm_noverity fb_receiver doom_goggles > SHA256SUMS
 
       - name: Generate manifest (schema 1)
         run: |
@@ -59,24 +84,35 @@ jobs:
 
           version = '$VERSION'
 
-          # init_rc content
-          with open('natartos.rc') as f:
-              rc_content = f.read()
-
           # loader
           with open('natartos_loader.so', 'rb') as f:
               loader_sha = hashlib.sha256(f.read()).hexdigest()
 
           # files
           files = []
-          for name, path, mode in [('inject.sh', '/vendor/natartos/inject.sh', '0755'),
-                                    ('adb_persist.sh', '/vendor/natartos/adb_persist.sh', '0755')]:
+          for name, path, mode in [('inject.sh', '/vendor/natartos/inject.sh', '0755')]:
               with open(name, 'rb') as f:
                   sha = hashlib.sha256(f.read()).hexdigest()
               files.append({'file': name, 'device_path': path, 'mode': mode, 'sha256': sha})
+          # icons
+          if os.path.isdir('icons'):
+              for f in sorted(os.listdir('icons')):
+                  if f.endswith('.rgba') and os.path.isfile(os.path.join('icons', f)):
+                      with open(os.path.join('icons', f), 'rb') as fh:
+                          sha = hashlib.sha256(fh.read()).hexdigest()
+                      files.append({'file': 'icons/' + f, 'device_path': '/vendor/natartos/icons/' + f, 'mode': '0644', 'sha256': sha})
+          # apps
+          if os.path.isdir('apps'):
+              for root, dirs, fnames in os.walk('apps'):
+                  for f in sorted(fnames):
+                      rel = os.path.join(root, f)
+                      mode = '0755' if os.access(rel, os.X_OK) else '0644'
+                      with open(rel, 'rb') as fh:
+                          sha = hashlib.sha256(fh.read()).hexdigest()
+                      files.append({'file': rel, 'device_path': '/vendor/natartos/' + rel, 'mode': mode, 'sha256': sha})
 
           # mods from mod.json
-          provides_map = {'hook_debug': 'screen', 'background': 'background', 'splash': 'splash'}
+          provides_map = {'overlay': 'screen', 'background': 'background', 'splash': 'splash'}
           mods = []
           for mj in sorted(glob.glob('../mods/*/mod.json')):
               with open(mj) as f:
@@ -98,7 +134,7 @@ jobs:
               prov = provides_map.get(m['id'])
               if prov:
                   entry['provides'] = prov
-              if m['id'] == 'hook_debug':
+              if m['id'] in ('overlay', 'popen', 'menu', 'doom', 'stream'):
                   entry['default'] = True
               mods.append(entry)
 
@@ -106,13 +142,9 @@ jobs:
               'schema': 1,
               'natartos_version': version,
               'device': 'E3T zv902',
-              'init_rc': {
-                  'device_path': '/vendor/etc/init/natartos.rc',
-                  'content': rc_content,
-              },
               'loader': {
                   'file': 'natartos_loader.so',
-                  'device_path': '/vendor/lib64/natartos_loader.so',
+                  'device_path': '/vendor/natartos/natartos_loader.so',
                   'mode': '0644',
                   'sha256': loader_sha,
               },
@@ -124,7 +156,9 @@ jobs:
               ],
               'remove': [
                   '/vendor/etc/init/persist_adb.rc',
+                  '/vendor/lib64/natartos_loader.so',
                   '/vendor/lib64/hook_debug.so',
+                  '/vendor/natartos/mods/hook_debug.so',
                   '/vendor/lib64/hook_bitmap.so',
               ],
           }

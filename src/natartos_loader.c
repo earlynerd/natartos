@@ -22,7 +22,7 @@
 #define RTLD_GLOBAL   0x00100
 #define RTLD_DEFAULT  ((void *)0)
 
-#define SAFE_THRESHOLD   3
+#define SAFE_THRESHOLD   5
 #define HEALTH_DELAY_SEC 30
 
 #define BOOTCOUNT_PATH  "/data/.natartos_bootcount"
@@ -306,15 +306,18 @@ static int load_mods(void) {
                 path[dir_len] = '/';
                 my_strcpy(path + dir_len + 1, d->d_name);
 
-                /* Opt-in: load only if /data/.natartos_on_<name> exists */
+                /* Opt-in: load only if /vendor/natartos/enabled/<name> exists */
                 int name_len = my_strlen(d->d_name);
-                if (19 + name_len >= PATH_BUF) {
+                #define ENABLED_DIR "/vendor/natartos/enabled/"
+                #define ENABLED_DIR_LEN 25
+                if (ENABLED_DIR_LEN + name_len >= PATH_BUF) {
                     pos += d->d_reclen;
                     continue;
                 }
                 char on_path[PATH_BUF];
-                my_strcpy(on_path, "/data/.natartos_on_");
-                my_strcpy(on_path + 19, d->d_name);
+                my_strcpy(on_path, ENABLED_DIR);
+                my_strcpy(on_path + ENABLED_DIR_LEN, d->d_name);
+                log_line2("check: ", on_path);
                 if (sys_faccessat(AT_FDCWD, on_path, 0) != 0) {
                     log_line2("skip: ", d->d_name);
                     pos += d->d_reclen;

@@ -1,8 +1,0 @@
-{
-  "id": "hook_debug",
-  "name": "Debug popen redirect",
-  "version": "5.0",
-  "type": "hook",
-  "so": "hook_debug.so",
-  "notes": "Redirects popen(./bin/debug_script_*) to /data/local/tmp/debug_script_*"
-}

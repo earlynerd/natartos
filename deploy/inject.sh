@@ -25,6 +25,7 @@ fi
 echo $$ > "$PIDFILE"
 
 sleep 3
+rm -f /data/local/tmp/fb_shared
 stop dji_glasses 2>/dev/null
 log "stopped init service dji_glasses"
 sleep 1
@@ -33,9 +34,10 @@ PID=$(pidof dji_glasses)
 sleep 1
 
 build_preload() {
-    P=/vendor/lib64/natartos_loader.so
-    for so in hook_menu.so hook_bitmap.so mod_mute.so; do
-        [ -f /vendor/natartos/mods/$so ] && [ -f /data/.natartos_on_$so ] && P="$P:/vendor/natartos/mods/$so"
+    P=/vendor/natartos/natartos_loader.so
+    for so in /vendor/natartos/mods/*.so; do
+        s=$(basename "$so")
+        [ -f /vendor/natartos/enabled/"$s" ] && P="$P:$so"
     done
     echo "$P"
 }

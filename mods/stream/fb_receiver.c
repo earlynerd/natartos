@@ -19,8 +19,10 @@
 #include <fcntl.h>
 #include <errno.h>
 #include <signal.h>
+#include <poll.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_ONLY_JPEG
@@ -44,6 +46,12 @@ static unsigned char *g_shm_map = NULL;
 static volatile unsigned int *g_shm_counter;
 static unsigned char *g_shm_pixels;
 static FILE *g_log = NULL;
+static volatile int g_exit = 0;
+static pid_t g_watcher_pid = -1;
+
+#define EV_KEY      0x01
+#define KEY_BACK    158
+#define EVDEV_PATH  "/dev/input/event0"
 
 static void logmsg(const char *fmt, ...) {
     if (!g_log) return;
@@ -54,14 +62,48 @@ static void logmsg(const char *fmt, ...) {
     fflush(g_log);
 }
 
+static void sigterm_handler(int sig) {
+    (void)sig;
+    g_exit = 1;
+}
+
 static int read_exact(int fd, void *buf, int n) {
     int total = 0;
     while (total < n) {
+        if (g_exit) return -1;
         int got = read(fd, (char *)buf + total, n - total);
         if (got <= 0) return -1;
         total += got;
     }
     return total;
+}
+
+/* Fork a child that monitors gpio_keys for Back button → SIGTERM parent */
+static void start_back_watcher(void) {
+    struct {
+        unsigned long tv_sec;
+        unsigned long tv_usec;
+        unsigned short type;
+        unsigned short code;
+        unsigned int value;
+    } ie;
+
+    pid_t pid = fork();
+    if (pid < 0) return;
+    if (pid > 0) { g_watcher_pid = pid; return; }
+
+    /* Child process */
+    int ev = open(EVDEV_PATH, O_RDONLY);
+    if (ev < 0) _exit(1);
+    while (read(ev, &ie, sizeof(ie)) == (int)sizeof(ie)) {
+        if (ie.type == EV_KEY && ie.code == KEY_BACK && ie.value == 1) {
+            kill(getppid(), SIGTERM);
+            close(ev);
+            _exit(0);
+        }
+    }
+    close(ev);
+    _exit(1);
 }
 
 static int shm_init(void) {
@@ -212,6 +254,15 @@ static void splash_screen(void) {
 
 int main(int argc, char **argv) {
     signal(SIGPIPE, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
+
+    /* SIGTERM without SA_RESTART so blocking read() returns EINTR */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = sigterm_handler;
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+
     g_log = fopen(LOG_PATH, "w");
     logmsg("fb_receiver: start\n");
 
@@ -228,11 +279,18 @@ int main(int argc, char **argv) {
     /* Show splash while waiting for connection */
     splash_screen();
 
-    /* Open input: FIFO (blocks until writer connects) or stdin */
+    /* Monitor Back button — child sends SIGTERM on press */
+    start_back_watcher();
+
+    /* Open input: FIFO (blocks until writer connects or SIGTERM) or stdin */
     if (argc > 1) {
         logmsg("input: %s (waiting for writer)\n", argv[1]);
         input_fd = open(argv[1], O_RDONLY);
-        if (input_fd < 0) { logmsg("open %s: %s\n", argv[1], strerror(errno)); goto cleanup; }
+        if (input_fd < 0) {
+            if (g_exit) logmsg("interrupted by Back\n");
+            else logmsg("open %s: %s\n", argv[1], strerror(errno));
+            goto cleanup;
+        }
         logmsg("writer connected\n");
     } else {
         logmsg("input: stdin\n");
@@ -269,6 +327,10 @@ int main(int argc, char **argv) {
 
     free(buf);
 cleanup:
+    if (g_watcher_pid > 0) {
+        kill(g_watcher_pid, SIGKILL);
+        waitpid(g_watcher_pid, NULL, WNOHANG);
+    }
     unlink(FLAG_PATH);
     if (input_fd > 0) close(input_fd);
     if (g_shm_map) munmap(g_shm_map, SHM_SIZE);

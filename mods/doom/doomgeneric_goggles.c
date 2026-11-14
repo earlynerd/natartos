@@ -1,6 +1,6 @@
 /*
  * doomgeneric platform shim for DJI Goggles 3.
- * Renders to /data/local/tmp/fb_shared (shared memory with hook_debug.so).
+ * Renders to /data/local/tmp/fb_shared (shared memory with hook_popen.so).
  * Reads input from /dev/input/event* (gpio_keys = 5D joystick + back).
  *
  * Display: Doom renders at 320x200, we scale 5x → 1600x1000, centered in 1920x1080.

@@ -159,7 +159,60 @@ volatile unsigned int natartos_health_signal = 0;
 
 typedef int (*push_frame_fn_t)(void *, int, void *);
 static push_frame_fn_t g_real_push_frame;
-static unsigned long *g_got_slot = 0;
+
+/* ---- Inline patch helpers ---- */
+
+static void flush_icache(void *addr, long size) {
+    unsigned long p = (unsigned long)addr & ~63UL;
+    unsigned long end = (unsigned long)addr + size;
+    for (; p < end; p += 64) {
+        __asm__ volatile("dc cvau, %0" :: "r"(p) : "memory");
+    }
+    __asm__ volatile("dsb ish" ::: "memory");
+    p = (unsigned long)addr & ~63UL;
+    for (; p < end; p += 64) {
+        __asm__ volatile("ic ivau, %0" :: "r"(p) : "memory");
+    }
+    __asm__ volatile("dsb ish" ::: "memory");
+    __asm__ volatile("isb" ::: "memory");
+}
+
+static unsigned char g_saved_prologue[16];
+static unsigned char g_hook_patch[16];
+static void *g_patch_target;
+
+static int inline_patch(void *target, void *hook) {
+    unsigned long page = (unsigned long)target & ~0xFFFUL;
+    if (sys_mprotect((void *)page, 0x2000, PROT_READ | PROT_WRITE | PROT_EXEC) < 0)
+        return -1;
+
+    g_patch_target = target;
+    my_memcpy(g_saved_prologue, target, 16);
+
+    /* Prepare hook redirect: LDR X16, [PC, #8]; BR X16; <hook_addr> */
+    unsigned int ldr_x16 = 0x58000050;
+    unsigned int br_x16  = 0xD61F0200;
+    unsigned long hook_addr = (unsigned long)hook;
+    my_memcpy(g_hook_patch, &ldr_x16, 4);
+    my_memcpy(g_hook_patch + 4, &br_x16, 4);
+    my_memcpy(g_hook_patch + 8, &hook_addr, 8);
+
+    /* Apply hook redirect */
+    my_memcpy(target, g_hook_patch, 16);
+    flush_icache(target, 16);
+
+    return 0;
+}
+
+/* Restore-call-repatch: avoids trampoline relocation of PC-relative insns */
+static int call_real_push_frame(void *dh, int plane, void *fb) {
+    my_memcpy(g_patch_target, g_saved_prologue, 16);
+    flush_icache(g_patch_target, 16);
+    int ret = ((push_frame_fn_t)g_patch_target)(dh, plane, fb);
+    my_memcpy(g_patch_target, g_hook_patch, 16);
+    flush_icache(g_patch_target, 16);
+    return ret;
+}
 
 /* ---- DMA-buf framebuffers ---- */
 
@@ -222,21 +275,45 @@ static int find_all_framebuffers(void) {
 
 /* ---- Screencap ---- */
 
+static void write_status(const char *msg) {
+    static const char LOG[] = "/data/local/tmp/screencap.log";
+    int fd = (int)sys_openat(AT_FDCWD, LOG, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (fd >= 0) { sys_write(fd, msg, my_strlen(msg)); sys_close(fd); }
+}
+
+static int fb_is_blank(void *fb) {
+    unsigned long *p = (unsigned long *)fb;
+    for (int i = 0; i < 64; i++) { if (p[i]) return 0; }
+    return 1;
+}
+
 static void do_capture(void) {
-    if (find_all_framebuffers() == 0) { NTLOG("capture: no fb"); return; }
+    int count = find_all_framebuffers();
+    if (count == 0) { NTLOG("capture: no fb"); write_status("FAIL"); return; }
+
+    /* Pick the first non-blank buffer (back-buffer may be empty) */
+    int idx = 0;
+    for (int i = 0; i < count; i++) {
+        if (!fb_is_blank(g_framebuffers[i])) { idx = i; break; }
+    }
+
     static const char OUT[] = "/data/local/tmp/screencap.bin";
     int ofd = (int)sys_openat(AT_FDCWD, OUT, O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (ofd < 0) { NTLOG("capture: open fail"); return; }
+    if (ofd < 0) { NTLOG("capture: open fail"); write_status("FAIL"); return; }
     long written = 0;
     while (written < FRAME_SIZE) {
         long chunk = FRAME_SIZE - written;
         if (chunk > 65536) chunk = 65536;
-        long w = sys_write(ofd, (char *)g_framebuffers[0] + written, chunk);
+        long w = sys_write(ofd, (char *)g_framebuffers[idx] + written, chunk);
         if (w <= 0) break;
         written += w;
     }
     sys_close(ofd);
-    NTLOG(written == FRAME_SIZE ? "capture: OK" : "capture: short");
+    if (written == FRAME_SIZE) {
+        NTLOG("capture: OK"); write_status("OK");
+    } else {
+        NTLOG("capture: short"); write_status("FAIL");
+    }
 }
 
 static void do_fb_write(void) {
@@ -278,13 +355,6 @@ static int g_inject_fd = -1;
 static volatile unsigned int g_inject_last_counter = 0;
 static volatile int g_inject_active = 0;
 static volatile int g_inject_frames = 0;
-static volatile int g_inject_push_ok = 0;
-
-static volatile void *g_saved_display_handle = 0;
-static volatile int g_saved_plane_id = 0;
-static char g_frame_buf_copy[512] __attribute__((aligned(16)));
-static void *g_pixel_buf = 0;
-static volatile int g_push_params_ready = 0;
 
 static void start_inject_thread(void);
 
@@ -292,6 +362,12 @@ static void overlay_cleanup(void) {
     NTLOG("cleanup: stopping overlay");
     g_inject_active = 0;
     if (g_inject_fd >= 0) { sys_close(g_inject_fd); g_inject_fd = -1; }
+
+    /* Clear DMA-bufs so splash doesn't persist after inject stops */
+    int fbc = __atomic_load_n(&g_fb_count, __ATOMIC_ACQUIRE);
+    for (int i = 0; i < fbc; i++)
+        natartos_memset(g_framebuffers[i], 0, FRAME_SIZE);
+    NTLOG_INT("cleanup: cleared fbs=", fbc);
 
     typedef int (*system_fn)(const char *);
     system_fn sys_fn = g_dlsym ? (system_fn)g_dlsym(RTLD_DEFAULT, "system") : 0;
@@ -379,13 +455,14 @@ static void *watcher_thread_fn(void *arg) {
     struct timespec_t ts = { 0, 500000000 };
     NTLOG("watcher: start");
     int cooldown = 0;
+    int logged_no_shm = 0;
     while (1) {
         sys_nanosleep(&ts, 0);
-        if (g_inject_active) { cooldown = 4; continue; }
+        if (g_inject_active) { cooldown = 4; logged_no_shm = 0; continue; }
         if (cooldown > 0) { cooldown--; continue; }
         if (sys_faccessat(AT_FDCWD, OVR, 0) != 0) continue;
         int fd = (int)sys_openat(AT_FDCWD, SHM, O_RDONLY, 0);
-        if (fd < 0) { NTLOG("watcher: no fb_shared yet"); continue; }
+        if (fd < 0) { if (!logged_no_shm) { NTLOG("watcher: waiting for fb_shared"); logged_no_shm = 1; } continue; }
         NTLOG("watcher: fb_shared opened, starting inject");
         g_inject_fd = fd;
         g_inject_active = 1;
@@ -405,105 +482,29 @@ static void start_watcher_thread(void) {
     NTLOG_INT("watcher: pthread_create ret=", ret);
 }
 
-/* ---- GOT patching ---- */
-
-#define PUSH_FRAME_GOT_OFFSET 0x1ffc8
-
 static int g_push_count = 0;
 
-static unsigned long find_lib_base(const char *lib_name) {
-    int fd = (int)sys_openat(AT_FDCWD, MAPS_PATH, O_RDONLY, 0);
-    if (fd < 0) return 0;
-
-    char buf[512];
-    int buf_len = 0;
-    int lib_name_len = my_strlen(lib_name);
-    unsigned long result = 0;
-
-    while (1) {
-        if (buf_len < (int)sizeof(buf) - 1) {
-            long got = sys_read(fd, buf + buf_len, sizeof(buf) - 1 - buf_len);
-            if (got <= 0 && buf_len == 0) break;
-            if (got > 0) buf_len += got;
-        }
-        buf[buf_len] = 0;
-
-        int nl = -1;
-        for (int i = 0; i < buf_len; i++) {
-            if (buf[i] == '\n') { nl = i; break; }
-        }
-        if (nl < 0) {
-            if (buf_len >= (int)sizeof(buf) - 1) { buf_len = 0; continue; }
-            break;
-        }
-
-        int has_lib = 0;
-        for (int i = 0; i + lib_name_len <= nl; i++) {
-            if (my_strncmp(buf + i, lib_name, lib_name_len) == 0) { has_lib = 1; break; }
-        }
-
-        if (has_lib) {
-            const char *p = buf;
-            unsigned long start = parse_hex(&p);
-            if (*p == '-') p++;
-            parse_hex(&p);
-            while (*p == ' ') p++;
-            if (p[0] == 'r' && (p[1] == '-' || p[1] == 'w') && (p[2] == 'x')) {
-                result = start;
-                break;
-            }
-            if (!result) result = start;
-        }
-
-        int remaining = buf_len - nl - 1;
-        for (int i = 0; i < remaining; i++) buf[i] = buf[nl + 1 + i];
-        buf_len = remaining;
-    }
-    sys_close(fd);
-    return result;
-}
-
-static int my_push_frame_hook(void *display_handle, int plane_id, void *frame_buf) {
+/*
+ * LD_PRELOAD interposition: export this name so the dynamic linker
+ * resolves all calls to duss_hal_display_push_frame to our version.
+ * The real function is resolved via dlsym(RTLD_NEXT) in mod_init.
+ */
+int duss_hal_display_push_frame(void *display_handle, int plane_id, void *frame_buf) {
     g_push_count++;
     natartos_health_signal++;
 
-    /* FPS every 600 frames */
-    {
-        static struct timespec_t ts_start;
-        static int fps_base_count = 0;
-        if (g_push_count == 1) {
-            sys_clock_gettime(CLOCK_MONOTONIC, &ts_start);
-            fps_base_count = 1;
-        } else if ((g_push_count % 600) == 0) {
-            struct timespec_t ts_now;
-            sys_clock_gettime(CLOCK_MONOTONIC, &ts_now);
-            long elapsed_ms = (ts_now.tv_sec - ts_start.tv_sec) * 1000
-                            + (ts_now.tv_nsec - ts_start.tv_nsec) / 1000000;
-            int frames = g_push_count - fps_base_count;
-            int fps = (elapsed_ms > 0) ? (int)((long)frames * 1000 / elapsed_ms) : 0;
-            char msg[80], tmp[32];
-            int p = 0;
-            my_memcpy(msg+p, "FPS: ", 5); p += 5;
-            fmt_dec(tmp, fps); my_memcpy(msg+p, tmp, my_strlen(tmp)); p += my_strlen(tmp);
-            my_memcpy(msg+p, " cnt=", 5); p += 5;
-            fmt_dec(tmp, g_push_count); my_memcpy(msg+p, tmp, my_strlen(tmp)); p += my_strlen(tmp);
-            msg[p] = 0;
-            NTLOG(msg);
-            ts_start = ts_now;
-            fps_base_count = g_push_count;
-        }
-    }
+    if (g_push_count == 1)
+        NTLOG("push_frame: HOOK ALIVE");
 
     /* Frame injection: check fb_override, open fb_shared, start inject thread */
-    static int s_override_active = 0;
     static int s_shm_fd = -1;
 
     if ((g_push_count & 0x3F) == 1) {
         static const char SHM_PATH[] = "/data/local/tmp/fb_shared";
         static const char OVR_FLAG[] = "/data/local/tmp/fb_override";
-        s_override_active = (sys_faccessat(AT_FDCWD, OVR_FLAG, 0) == 0);
-        if (s_override_active && g_fb_count == 0) find_all_framebuffers();
-        if (s_override_active && s_shm_fd < 0) {
+        int ovr = (sys_faccessat(AT_FDCWD, OVR_FLAG, 0) == 0);
+        if (ovr && g_fb_count == 0) find_all_framebuffers();
+        if (ovr && s_shm_fd < 0) {
             s_shm_fd = (int)sys_openat(AT_FDCWD, SHM_PATH, O_RDONLY, 0);
             if (s_shm_fd >= 0) {
                 g_inject_fd = s_shm_fd;
@@ -514,45 +515,24 @@ static int my_push_frame_hook(void *display_handle, int plane_id, void *frame_bu
         }
     }
 
-    /* Save frame params for pixel buffer */
-    g_saved_display_handle = display_handle;
-    g_saved_plane_id = plane_id;
-    if (frame_buf && !g_push_params_ready) {
-        my_memcpy(g_frame_buf_copy, frame_buf, 512);
-        if (!g_pixel_buf) {
-            g_pixel_buf = sys_mmap(0, FRAME_SIZE, PROT_READ|PROT_WRITE,
-                                   MAP_SHARED|MAP_ANONYMOUS, -1, 0);
-            if (g_pixel_buf == MAP_FAILED) g_pixel_buf = 0;
-        }
-        if (g_pixel_buf) {
-            *(unsigned long *)(g_frame_buf_copy + 0x20) = (unsigned long)g_pixel_buf;
-            g_push_params_ready = 1;
-            NTLOG_HEX("pixel_buf=", (unsigned long)g_pixel_buf);
-        }
+    /* Skip push_frame when injecting — inject thread paints DMA-bufs directly */
+    if (g_inject_active) {
+        static int s_skip_logged = 0;
+        if (!s_skip_logged) { NTLOG("push_frame: SKIP (inject)"); s_skip_logged = 1; }
+        return 0;
     }
 
-    return g_real_push_frame(display_handle, plane_id, frame_buf);
-}
-
-static void do_got_patch(void) {
-    unsigned long disp_base = find_lib_base("libdisp_eng.so");
-    if (!disp_base) { NTLOG("GOT: libdisp_eng.so not found"); return; }
-    unsigned long got_addr = disp_base + PUSH_FRAME_GOT_OFFSET;
-
-    unsigned long page = got_addr & ~0xFFFUL;
-    sys_mprotect((void *)page, 0x2000, PROT_READ | PROT_WRITE);
-
-    unsigned long *slot = (unsigned long *)got_addr;
-    unsigned long old_val = *slot;
-    g_real_push_frame = (push_frame_fn_t)old_val;
-
-    NTLOG_HEX("GOT: slot=", got_addr);
-    NTLOG_HEX("GOT: old=", old_val);
-
-    *slot = (unsigned long)my_push_frame_hook;
-    g_got_slot = slot;
-
-    NTLOG_HEX("GOT: PATCHED new=", (unsigned long)my_push_frame_hook);
+    if (g_real_push_frame) {
+        static int s_was_injecting = 0;
+        static int s_resume_logged = 0;
+        if (g_inject_frames > 0) s_was_injecting = 1;
+        if (s_was_injecting && !s_resume_logged) {
+            NTLOG("push_frame: RESUME passthrough");
+            s_resume_logged = 1;
+        }
+        return g_real_push_frame(display_handle, plane_id, frame_buf);
+    }
+    return 0;
 }
 
 /* ---- Signal handlers ---- */
@@ -577,8 +557,6 @@ static void init_hook(void) {
     struct kernel_sigaction sa3 = { .handler = sigusr1_handler, .flags = SA_RESTART };
     sys_rt_sigaction(SIGUSR1, &sa3, 0, 8);
 
-    NTLOG("hook_overlay loaded");
-
     char exe[256];
     int cmd_fd = (int)sys_openat(AT_FDCWD, "/proc/self/cmdline", O_RDONLY, 0);
     int is_glasses = 0;
@@ -595,14 +573,32 @@ static void init_hook(void) {
         }
     }
 
-    if (is_glasses) {
-        NTLOG("GOT: patching in dji_glasses");
-        do_got_patch();
-    }
+    if (!is_glasses) return;
+
+    NTLOG("hook_overlay loaded");
 }
 
 int natartos_mod_init(void *(*loader_dlsym)(void *, const char *)) {
     g_dlsym = (dlsym_fn)loader_dlsym;
+
+    /* Resolve the REAL push_frame behind our LD_PRELOAD interposition */
+    push_frame_fn_t real_fn = (push_frame_fn_t)loader_dlsym(RTLD_NEXT,
+                                                              "duss_hal_display_push_frame");
+    if (!real_fn) {
+        NTLOG("WARN: push_frame not found via RTLD_NEXT");
+    } else {
+        NTLOG_HEX("real push_frame=", (unsigned long)real_fn);
+        /* Inline-patch the real function to redirect to our hook */
+        if (inline_patch((void *)real_fn,
+                         (void *)duss_hal_display_push_frame) == 0) {
+            g_real_push_frame = call_real_push_frame;
+            NTLOG("inline patch: OK");
+        } else {
+            NTLOG("inline patch: FAILED (mprotect)");
+            g_real_push_frame = real_fn;
+        }
+    }
+
     NTLOG("init: starting watcher");
     start_watcher_thread();
     return 0;

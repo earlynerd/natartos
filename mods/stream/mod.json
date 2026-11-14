@@ -1,16 +1,13 @@
 {
   "id": "stream",
   "name": "PC Stream",
-  "version": "0.1",
+  "version": "1.0",
   "type": "app",
-  "so": null,
+  "so": "mod_stream.so",
+  "source": "mod.c",
   "menu": {
     "label": "PC Stream",
     "action": "launch"
   },
-  "launch": {
-    "binary": "/data/local/tmp/fb_receiver",
-    "display": true
-  },
-  "notes": "Reads framed JPEG from stdin (via ADB from toolya), decodes BGRA, writes fb_shared. Needs hook_overlay.so inject thread."
+  "notes": "Registers PC Stream in menu. Launches fb_receiver in FIFO mode with splash screen. Web or ADB client writes JPEG frames to pipe."
 }

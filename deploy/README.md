@@ -1,29 +1,37 @@
-# natartos autostart deployment
+# natartos deployment
 
-## Problem
-Android 9 does not support `override` in RC files.
-`/system` is protected by dm-verity (remount is impossible).
+## Per-session start (v0.1.0)
 
-## Solution
-Trigger-based inject: when `dji.glasses_service=1`, the `natartos_inject` service
-kills the stock dji_glasses and restarts it with LD_PRELOAD.
+Mods do not auto-start after reboot. Each session requires manual start.
 
 ## Files
-- `natartos.rc` → `/vendor/etc/init/natartos.rc`
-- `inject.sh` → `/vendor/natartos/inject.sh` (chmod 755)
+- `inject.sh` → `/vendor/natartos/inject.sh` (chmod 755) — kills stock
+  dji_glasses, restarts with LD_PRELOAD, respawn loop with crash guard
 
 ## Deploy
 
 ```sh
-toolya natartos push --local dist             # deploy .so files
-toolya natartos install --local dist --yes    # full install (remount, push, chmod, cleanup)
+toolya natartos install          # install from latest release
+toolya natartos start            # activate mods this session
 ```
 
-## After deploy
-A reboot is required. After reboot you also need to re-enable ADB (enable_adb.py).
+## After reboot
+
+1. `toolya adb --yes` — re-enable ADB via DUML
+2. `toolya natartos start` — re-activate mods
+
+Installed files on `/vendor` survive reboots. Only start needs repeating.
 
 ## How it works
-1. On boot, `dji.glasses_service=1` → the stock trigger starts dji_glasses
-2. Our trigger starts `natartos_inject` (oneshot)
-3. inject.sh waits 3s, kills the stock dji_glasses, restarts it with LD_PRELOAD
-4. natartos_loader.so loads and pulls mods from /vendor/natartos/mods/
+1. `inject.sh` stops stock `dji_glasses`
+2. Rebuilds `LD_PRELOAD` path (loader + enabled mods)
+3. Starts `dji_glasses` with `LD_PRELOAD`
+4. Respawn loop: if process exits, restarts (up to 5 crashes in 120s)
+
+## Archived (non-working)
+
+The following files were part of the persistence approach and do not work:
+- `natartos.rc` — vendor init trigger (vendor `.rc` not parsed by DJI init)
+- `adb_persist.sh` — ADB re-enable at boot (depends on init trigger)
+
+See `.agent/persistence-archive/` for copies and documentation.

@@ -388,41 +388,10 @@ int natartos_mod_init(void *(*loader_dlsym)(void *, const char *)) {
     return 1;
 }
 
-/* ── mod_register: register built-in menu entries ── */
+/* ── mod_register: menu framework only, apps register themselves ── */
 
 int natartos_mod_register(void *(*loader_dlsym)(void *, const char *)) {
     (void)loader_dlsym;
-    NTLOG("=== register ===");
-
-    natartos_menu_entry doom = {
-        .id       = "doom",
-        .name     = "Doom",
-        .subtitle = "Classic FPS",
-        .icon_path = "/data/local/tmp/natartos_icon_doom.rgba",
-        .command  = "nohup sh -c '"
-                    "touch /data/local/tmp/fb_override; "
-                    "/data/local/tmp/doom_goggles "
-                    "-iwad /data/local/tmp/freedoom1.wad; "
-                    "rm -f /data/local/tmp/fb_override"
-                    "' >/dev/null 2>&1 &",
-        .priority = 100,
-    };
-    natartos_menu_register(&doom);
-
-    natartos_menu_entry stream = {
-        .id       = "stream",
-        .name     = "PC Stream",
-        .subtitle = "Moonlight",
-        .icon_path = "/data/local/tmp/natartos_icon_stream.rgba",
-        .command  = "nohup sh -c '"
-                    "touch /data/local/tmp/fb_override; "
-                    "/data/local/tmp/fb_receiver; "
-                    "rm -f /data/local/tmp/fb_override"
-                    "' >/dev/null 2>&1 &",
-        .priority = 200,
-    };
-    natartos_menu_register(&stream);
-
-    NTLOG_INT("=== register done, count=", g_slot_count);
+    NTLOG_INT("=== register ready, slots=", g_slot_count);
     return 1;
 }

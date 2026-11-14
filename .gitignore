@@ -1,6 +1,7 @@
 *.so
 *.o
 *.png
+*.wad
 dist/
 backups/
 .agent/

@@ -34,7 +34,7 @@ if [ "$1" = "--stock" ]; then
 else
     echo '=== natartos start ==='
     PRELOAD=/vendor/lib64/natartos_loader.so
-    for so in hook_menu.so hook_debug.so hook_bitmap.so mod_mute.so mod_input.so; do
+    for so in hook_menu.so hook_popen.so hook_bitmap.so mod_mute.so mod_input.so; do
         [ -f /vendor/natartos/mods/$so ] && [ -f /data/.natartos_on_$so ] && PRELOAD="$PRELOAD:/vendor/natartos/mods/$so"
     done
     echo "LD_PRELOAD=$PRELOAD"
