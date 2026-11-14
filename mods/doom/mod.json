@@ -1,0 +1,17 @@
+{
+  "id": "doom",
+  "name": "Doom",
+  "version": "1.0",
+  "type": "app",
+  "so": null,
+  "menu": {
+    "label": "Doom",
+    "action": "launch"
+  },
+  "launch": {
+    "binary": "/data/local/tmp/doom_goggles",
+    "args": ["-iwad", "/data/local/tmp/freedoom1.wad"],
+    "display": true
+  },
+  "notes": "doomgeneric port, 320x200 scaled 5x to 1600x1000 centered. Needs fb_shared + hook_debug.so fb_override"
+}

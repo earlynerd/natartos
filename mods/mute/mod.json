@@ -1,0 +1,25 @@
+{
+  "id": "mute",
+  "name": "Audio Control",
+  "version": "2.0",
+  "type": "tweak",
+  "so": "mod_mute.so",
+  "menu": {
+    "label": "Audio Control",
+    "action": "submenu"
+  },
+  "toggles": [
+    {
+      "label": "Mute All",
+      "flag": "/data/local/tmp/natartos_mute"
+    },
+    {
+      "label": "Mute Startup",
+      "flag": "/data/local/tmp/natartos_mute_startup"
+    },
+    {
+      "label": "Mute Buttons",
+      "flag": "/data/local/tmp/natartos_mute_buttons"
+    }
+  ]
+}

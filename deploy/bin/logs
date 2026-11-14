@@ -1,0 +1,15 @@
+#!/system/bin/sh
+# natartos logs — show all logs, optionally clear first
+# Usage: nl [-c]  (c = clear first)
+[ "$1" = "-c" ] && {
+    > /data/local/tmp/natartos_loader.log
+    > /data/local/tmp/natartos_menu.log
+    echo '(cleared)'
+}
+echo '──── loader ────'
+cat /data/local/tmp/natartos_loader.log 2>/dev/null
+echo '──── menu ────'
+cat /data/local/tmp/natartos_menu.log 2>/dev/null
+echo '──── inject ────'
+tail -20 /data/local/tmp/natartos_inject.log 2>/dev/null
+echo '────────────────'

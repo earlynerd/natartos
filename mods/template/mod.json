@@ -1,0 +1,14 @@
+{
+  "id": "template",
+  "name": "Template",
+  "version": "0.1",
+  "type": "tweak",
+  "so": "mod_template.so",
+  "menu": {
+    "label": "Template",
+    "action": "toggle"
+  },
+  "toggle": {
+    "flag": "/data/local/tmp/natartos_template"
+  }
+}

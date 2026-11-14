@@ -1,0 +1,15 @@
+{
+  "id": "adb_persist",
+  "name": "ADB Persistence",
+  "version": "1.0",
+  "type": "service",
+  "so": null,
+  "menu": {
+    "label": "ADB Persist",
+    "action": "toggle"
+  },
+  "files": {
+    "/vendor/natartos/adb_persist.sh": "deploy/adb_persist.sh"
+  },
+  "notes": "Re-enables ADB after reboot via setprop sys.usb.config acm,adb. Opt-in: /data/.natartos_on_adb_persist"
+}

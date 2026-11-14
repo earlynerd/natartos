@@ -1,0 +1,159 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: gcc:13
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cross-compiler
+        run: apt-get update -qq && apt-get install -y -qq gcc-aarch64-linux-gnu python3
+
+      - name: Build loader
+        run: cd src && make
+
+      - name: Build mods
+        run: |
+          CC="aarch64-linux-gnu-gcc"
+          CFLAGS="-shared -fPIC -O2 -fno-builtin -nostdlib"
+          for src in mods/*/mod.c; do
+            dir=$(basename $(dirname "$src"))
+            if [ -f "mods/$dir/mod.json" ]; then
+              if grep -q '"so".*null' "mods/$dir/mod.json"; then
+                echo "[skip] $dir (so=null)"; continue
+              fi
+              so=$(grep '"so"' "mods/$dir/mod.json" | head -1 | sed 's/.*"so"[^"]*"\([^"]*\)".*/\1/')
+            fi
+            [ -z "$so" ] && so="${dir}.so"
+            $CC $CFLAGS -I include -I mods -Wl,-soname,$so -o "dist/$so" "$src"
+            echo "[natartos] $so ($(stat -c%s "dist/$so") bytes)"
+            so=
+          done
+
+      - name: Collect dist
+        run: |
+          mkdir -p dist
+          cp src/natartos_loader.so dist/
+          cp deploy/inject.sh dist/
+          cp deploy/adb_persist.sh dist/
+          cp deploy/natartos.rc dist/
+          chmod 644 dist/*.so
+          cd dist
+          sha256sum *.so inject.sh adb_persist.sh natartos.rc > SHA256SUMS
+
+      - name: Generate manifest (schema 1)
+        run: |
+          cd dist
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          python3 -c "
+          import json, os, glob, hashlib
+
+          version = '$VERSION'
+
+          # init_rc content
+          with open('natartos.rc') as f:
+              rc_content = f.read()
+
+          # loader
+          with open('natartos_loader.so', 'rb') as f:
+              loader_sha = hashlib.sha256(f.read()).hexdigest()
+
+          # files
+          files = []
+          for name, path, mode in [('inject.sh', '/vendor/natartos/inject.sh', '0755'),
+                                    ('adb_persist.sh', '/vendor/natartos/adb_persist.sh', '0755')]:
+              with open(name, 'rb') as f:
+                  sha = hashlib.sha256(f.read()).hexdigest()
+              files.append({'file': name, 'device_path': path, 'mode': mode, 'sha256': sha})
+
+          # mods from mod.json
+          provides_map = {'hook_debug': 'screen', 'background': 'background', 'splash': 'splash'}
+          mods = []
+          for mj in sorted(glob.glob('../mods/*/mod.json')):
+              with open(mj) as f:
+                  m = json.load(f)
+              so = m.get('so')
+              if so is None or not os.path.isfile(so):
+                  continue
+              with open(so, 'rb') as f:
+                  sha = hashlib.sha256(f.read()).hexdigest()
+              entry = {
+                  'id': m['id'],
+                  'name': m.get('name', m['id']),
+                  'description': m.get('notes', ''),
+                  'file': so,
+                  'device_path': '/vendor/natartos/mods/' + so,
+                  'mode': '0644',
+                  'sha256': sha,
+              }
+              prov = provides_map.get(m['id'])
+              if prov:
+                  entry['provides'] = prov
+              if m['id'] == 'hook_debug':
+                  entry['default'] = True
+              mods.append(entry)
+
+          manifest = {
+              'schema': 1,
+              'natartos_version': version,
+              'device': 'E3T zv902',
+              'init_rc': {
+                  'device_path': '/vendor/etc/init/natartos.rc',
+                  'content': rc_content,
+              },
+              'loader': {
+                  'file': 'natartos_loader.so',
+                  'device_path': '/vendor/lib64/natartos_loader.so',
+                  'mode': '0644',
+                  'sha256': loader_sha,
+              },
+              'files': files,
+              'mods': mods,
+              'backup': [
+                  '/vendor/etc/init/dji_glasses_custom.rc',
+                  '/vendor/etc/selinux/precompiled_sepolicy',
+              ],
+              'remove': [
+                  '/vendor/etc/init/persist_adb.rc',
+                  '/vendor/lib64/hook_debug.so',
+                  '/vendor/lib64/hook_bitmap.so',
+              ],
+          }
+          with open('manifest.json', 'w') as f:
+              json.dump(manifest, f, indent=2)
+              f.write('\n')
+          "
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: natartos-dist
+          path: dist/
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: natartos-dist
+          path: dist/
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

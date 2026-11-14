@@ -1,0 +1,13 @@
+*.so
+*.o
+*.png
+dist/
+backups/
+.agent/
+.idea/
+
+# internal working notes — not public
+reviews/
+DESIGN.md
+MANIFEST.md
+TODO.md

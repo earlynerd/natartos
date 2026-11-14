@@ -1,0 +1,101 @@
+#!/bin/bash
+# Goggles helper — runs device scripts or common operations.
+# Usage: g <command> [args]
+#   g status          — health check
+#   g restart         — clean restart with hooks
+#   g restart --stock — clean restart without hooks
+#   g logs            — show all logs
+#   g logs -c         — clear logs then show
+#   g deploy          — build + push all to device
+#   g deploy menu     — build + push only hook_menu.so
+#   g shell [cmd]     — adb shell
+#   g snap            — goggles screenshot
+#   g doom-stop       — kill doom + clean up overlay
+#   g glasses         — restart dji_glasses with mods
+#   g glasses --stock — restart dji_glasses stock (no mods)
+set -e
+ADB="docker exec adb-server adb"
+PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+BIN=/vendor/natartos/bin
+
+die() { echo "ERROR: $1" >&2; exit 1; }
+adb_ok() { timeout 5 $ADB shell "echo ok" >/dev/null 2>&1 || die "goggles offline"; }
+
+case "${1:-help}" in
+    status|restart|logs)
+        adb_ok
+        $ADB shell "$BIN/$1 $2"
+        ;;
+    deploy)
+        shift
+        cd "$PROJ"
+        bash scripts/build.sh 2>&1 | tail -5
+        if [ $# -gt 0 ]; then
+            # Deploy specific mod(s)
+            for mod in "$@"; do
+                SO="${mod%.so}.so"
+                [ "$SO" = "hook_${SO#hook_}" ] || [ "$SO" = "mod_${SO#mod_}" ] || SO="hook_${SO}.so"
+                # Try exact name first
+                [ -f "dist/$mod" ] && SO="$mod"
+                [ -f "dist/$SO" ] || { echo "not found: $SO"; continue; }
+                docker cp "dist/$SO" adb-server:/tmp/_deploy_
+                $ADB push /tmp/_deploy_ "/vendor/natartos/mods/$SO"
+                echo "pushed $SO"
+            done
+        else
+            bash scripts/deploy.sh
+        fi
+        $ADB shell sync
+        ;;
+    shell)
+        shift
+        adb_ok
+        if [ $# -gt 0 ]; then
+            $ADB shell "$*"
+        else
+            $ADB shell
+        fi
+        ;;
+    snap)
+        adb_ok
+        goggles-snap 2>&1 | tail -3
+        ;;
+    doom-stop)
+        adb_ok
+        $ADB shell "kill \$(pidof doom_goggles) 2>/dev/null; rm -f /data/local/tmp/fb_override /data/local/tmp/fb_shared; echo 'doom stopped'"
+        ;;
+    glasses)
+        adb_ok
+        if [ "${2:-}" = "--stock" ]; then
+            echo "restarting stock (no mods)..."
+            $ADB shell "
+                pkill -9 -f inject.sh 2>/dev/null
+                kill -9 \$(pidof dji_glasses) 2>/dev/null
+                sleep 1
+                stop dji_glasses 2>/dev/null
+                start dji_glasses
+            "
+        else
+            echo "restarting with mods..."
+            $ADB shell "kill -9 \$(pidof dji_glasses) 2>/dev/null; true"
+            $ADB shell "cat /data/local/tmp/natartos_inject.pid 2>/dev/null | xargs kill -9 2>/dev/null; true"
+            sleep 2
+            $ADB shell "rm -f /data/.natartos_bootcount /data/.natartos_status; > /data/local/tmp/natartos.log; setsid /vendor/natartos/inject.sh < /dev/null > /dev/null 2>&1 &"
+            sleep 6
+            PID=$($ADB shell "pidof dji_glasses" 2>/dev/null | tr -d '\r')
+            if [ -n "$PID" ]; then
+                echo "dji_glasses running (PID $PID)"
+                $ADB shell "cat /data/local/tmp/natartos.log" 2>/dev/null
+            else
+                echo "ERROR: dji_glasses not running"
+                $ADB shell "cat /data/local/tmp/natartos_inject.log 2>/dev/null | tail -5"
+            fi
+        fi
+        ;;
+    help|--help|-h)
+        sed -n '2,15p' "$0" | sed 's/^# //'
+        ;;
+    *)
+        die "unknown command: $1 (try: g help)"
+        ;;
+esac

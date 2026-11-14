@@ -1,0 +1,9 @@
+{
+  "id": "input",
+  "name": "Key Injection",
+  "version": "1.0",
+  "type": "hook",
+  "so": "mod_input.so",
+  "menu": null,
+  "notes": "Signal SIGRTMIN+2 triggers key injection via EW CoreRoot_DriveKeyboardHitting"
+}

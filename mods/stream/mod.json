@@ -1,0 +1,16 @@
+{
+  "id": "stream",
+  "name": "PC Stream",
+  "version": "0.1",
+  "type": "app",
+  "so": null,
+  "menu": {
+    "label": "PC Stream",
+    "action": "launch"
+  },
+  "launch": {
+    "binary": "/data/local/tmp/fb_receiver",
+    "display": true
+  },
+  "notes": "Reads framed JPEG from stdin (via ADB from toolya), decodes BGRA, writes fb_shared. Needs hook_overlay.so inject thread."
+}

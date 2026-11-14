@@ -1,0 +1,30 @@
+#!/system/bin/sh
+# natartos status — quick health check
+echo '── process ──'
+PID=$(pidof dji_glasses)
+if [ -n "$PID" ]; then
+    echo "dji_glasses PID=$PID"
+    PRELOAD=$(cat /proc/$PID/environ 2>/dev/null | tr '\0' '\n' | grep LD_PRELOAD)
+    [ -n "$PRELOAD" ] && echo "  $PRELOAD" || echo '  STOCK'
+    echo '  hooks:'
+    cat /proc/$PID/maps | grep -oE '/vendor/natartos/[^ ]+' | sort -u | sed 's/^/    /'
+else
+    echo 'NOT RUNNING'
+fi
+
+echo '── children ──'
+ps -A | grep -E 'doom|fb_receiver|inject' | grep -v grep || echo 'none'
+
+echo '── flags ──'
+ls /data/local/tmp/fb_override 2>/dev/null && echo 'WARNING: fb_override!'
+for f in /data/.natartos_on_*; do [ -f "$f" ] && echo "  $(basename $f)"; done
+BC=$(xxd -l4 -p /data/.natartos_bootcount 2>/dev/null)
+echo "bootcount=$BC"
+
+echo '── logs ──'
+echo '[loader]'
+tail -5 /data/local/tmp/natartos_loader.log 2>/dev/null
+echo '[menu]'
+tail -10 /data/local/tmp/natartos_menu.log 2>/dev/null
+echo '[inject]'
+tail -5 /data/local/tmp/natartos_inject.log 2>/dev/null

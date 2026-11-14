@@ -1,0 +1,15 @@
+{
+  "id": "background",
+  "name": "Custom Background",
+  "version": "2.0",
+  "type": "theme",
+  "so": "hook_bitmap.so",
+  "menu": {
+    "label": "Custom Background",
+    "action": "toggle"
+  },
+  "toggle": {
+    "flag": "/data/local/tmp/natartos_background"
+  },
+  "notes": "Place custom jpg at /vendor/custom/extern_bitmap/background_disconnect.jpg"
+}

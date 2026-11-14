@@ -1,0 +1,9 @@
+{
+  "id": "menu",
+  "name": "Menu Hook",
+  "version": "2.0",
+  "type": "preload",
+  "so": "hook_menu.so",
+  "description": "LD_PRELOAD interposition on MxBindableAbstractMenu_Reload to inject custom menu items",
+  "menu": null
+}

@@ -1,0 +1,16 @@
+{
+  "id": "splash",
+  "name": "Custom Splash",
+  "version": "1.0",
+  "type": "theme",
+  "so": null,
+  "menu": {
+    "label": "Custom Splash",
+    "action": "toggle"
+  },
+  "toggle": {
+    "flag": "/data/local/tmp/natartos_splash",
+    "on_cmd": "cp /vendor/natartos/assets/splash_custom.bgra /data/local/tmp/splash_override.bgra",
+    "off_cmd": "rm -f /data/local/tmp/splash_override.bgra"
+  }
+}

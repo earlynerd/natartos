@@ -1,0 +1,48 @@
+#!/system/bin/sh
+# natartos restart — clean restart dji_glasses with hooks
+# Usage: nr [--stock]
+echo '=== cleanup ==='
+# Kill children
+for p in $(pidof doom_goggles fb_receiver 2>/dev/null); do
+    kill -9 $p 2>/dev/null && echo "killed child $p"
+done
+rm -f /data/local/tmp/fb_override
+
+# Kill inject.sh
+IPID=$(cat /data/local/tmp/natartos_inject.pid 2>/dev/null)
+[ -n "$IPID" ] && kill -0 "$IPID" 2>/dev/null && kill -9 "$IPID" && echo "killed inject $IPID"
+
+# Kill dji_glasses
+PID=$(pidof dji_glasses)
+[ -n "$PID" ] && kill "$PID" && echo "killed dji_glasses $PID"
+sleep 1
+kill -9 $(pidof dji_glasses) 2>/dev/null
+
+# Stop init service
+setprop ctl.stop dji_glasses 2>/dev/null
+
+# Clear logs
+> /data/local/tmp/natartos_loader.log
+> /data/local/tmp/natartos_menu.log
+echo 'logs cleared'
+
+sleep 1
+
+if [ "$1" = "--stock" ]; then
+    echo '=== stock start ==='
+    /system/bin/dji_glasses -g -f &
+else
+    echo '=== natartos start ==='
+    PRELOAD=/vendor/lib64/natartos_loader.so
+    for so in hook_menu.so hook_debug.so hook_bitmap.so mod_mute.so mod_input.so; do
+        [ -f /vendor/natartos/mods/$so ] && [ -f /data/.natartos_on_$so ] && PRELOAD="$PRELOAD:/vendor/natartos/mods/$so"
+    done
+    echo "LD_PRELOAD=$PRELOAD"
+    export LD_PRELOAD="$PRELOAD"
+    nohup /system/bin/dji_glasses -g -f > /dev/null 2>&1 &
+fi
+
+sleep 2
+PID=$(pidof dji_glasses)
+echo "=== started PID=$PID ==="
+cat /data/local/tmp/natartos_menu.log 2>/dev/null

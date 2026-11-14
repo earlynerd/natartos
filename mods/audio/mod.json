@@ -1,0 +1,12 @@
+{
+  "id": "audio",
+  "name": "Custom Audio",
+  "version": "0.1.0",
+  "type": "theme",
+  "so": "hook_audio.so",
+  "menu": {
+    "label": "Custom Audio",
+    "action": "toggle"
+  },
+  "notes": "Redirects /system/etc/audio/*.wav to /vendor/custom/audio/. Place replacement WAV files with same filename. Warnings not blocked — only replaced if custom file exists."
+}
