@@ -132,6 +132,34 @@ int open64(const char *path, int flags, ...) {
     return do_open(path, flags | O_LARGEFILE, mode);
 }
 
+/* The image loader decodes via openat(), not open() — so the redirect must cover
+ * it too, or the displayed background loads the stock file. For an absolute path
+ * the dirfd is ignored, so route it through the same redirect; relative paths
+ * pass through untouched with their original dirfd. */
+int openat(int dirfd, const char *path, int flags, ...) {
+    int mode = 0;
+    if (flags & O_CREAT) {
+        __builtin_va_list ap;
+        __builtin_va_start(ap, flags);
+        mode = __builtin_va_arg(ap, int);
+        __builtin_va_end(ap);
+    }
+    if (path && path[0] == '/') return do_open(path, flags, mode);
+    return (int)sys_openat(dirfd, path, flags, mode);
+}
+
+int openat64(int dirfd, const char *path, int flags, ...) {
+    int mode = 0;
+    if (flags & O_CREAT) {
+        __builtin_va_list ap;
+        __builtin_va_start(ap, flags);
+        mode = __builtin_va_arg(ap, int);
+        __builtin_va_end(ap);
+    }
+    if (path && path[0] == '/') return do_open(path, flags | O_LARGEFILE, mode);
+    return (int)sys_openat(dirfd, path, flags | O_LARGEFILE, mode);
+}
+
 int natartos_mod_register(void *(*dlsym_fn)(void *, const char *)) {
     natartos_menu_register_fn reg =
         (natartos_menu_register_fn)dlsym_fn((void *)0, "natartos_menu_register");
