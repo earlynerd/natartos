@@ -38,8 +38,8 @@ See [SECURITY.md](SECURITY.md) for the trust model.
 | `background` | Custom Background | theme | no | tested |
 | `audio` | Custom Audio | theme | no | tested |
 | `mute` | Audio Control | tweak | no | tested |
-| `input` | Key Injection | hook | no | tested |
-| `splash` | Custom Splash | theme | no | discovery |
+| `input` | Key Injection | hook | no | experimental |
+| `splash` | Custom Splash | theme | no | in progress |
 
 Mods are opt-in — you choose which to install. Each mod is a standalone `.so`
 loaded by the loader. To write your own, see [MOD_SPEC.md](MOD_SPEC.md) and the
