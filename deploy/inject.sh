@@ -53,6 +53,14 @@ while true; do
     EXIT=$?
     log "exited code=$EXIT"
 
+    # Intentional restart (overlay kicks this on app exit to repaint the UI) —
+    # not a crash: respawn at once, don't touch the crash counter.
+    if [ -f /data/local/tmp/natartos_restart ]; then
+        rm -f /data/local/tmp/natartos_restart
+        log "intentional restart (app exit)"
+        continue
+    fi
+
     now=$(date +%s)
     elapsed=$((now - last_reset))
     if [ "$elapsed" -ge "$WINDOW_SEC" ]; then

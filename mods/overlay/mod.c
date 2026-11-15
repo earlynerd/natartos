@@ -36,9 +36,14 @@
 #define __NR_clock_gettime 113
 
 #define MAP_SHARED  1
+#define MAP_PRIVATE 2
 #define MAP_ANONYMOUS 0x20
 #define MAP_FAILED  ((void *)-1)
 #define CLOCK_MONOTONIC 1
+
+#define EV_KEY   1
+#define KEY_BACK 158
+struct input_event_t { long sec, usec; unsigned short type, code; int value; };
 
 #define FRAME_SIZE 8294400L
 static const char MAPS_PATH[] = "/proc/self/maps";
@@ -177,41 +182,91 @@ static void flush_icache(void *addr, long size) {
     __asm__ volatile("isb" ::: "memory");
 }
 
-static unsigned char g_saved_prologue[16];
-static unsigned char g_hook_patch[16];
+/*
+ * Entry-point detour with a SINGLE-INSTRUCTION atomic patch.
+ *
+ * The real push_frame is a tiny leaf dispatcher whose first instruction
+ * (ldr x8,[x0,#0x10]) is position-independent. We overwrite only that one
+ * 4-byte word with `B <veneer>`. A naturally-aligned 32-bit store is fetched
+ * atomically by every core, so a concurrent render thread can never observe a
+ * torn instruction. The target is patched ONCE and never rewritten — unlike
+ * the old per-frame restore/call/re-patch, which rewrote 16 live bytes 60×/s
+ * and SIGSEGV'd dji_glasses when the render thread raced the rewrite.
+ *
+ *   veneer     : LDR X16,[PC,#8]; BR X16; .quad hook       (placed near the
+ *                target so the single `B` can reach it)
+ *   call-orig  : <orig insn0>; LDR X16,[PC,#8]; BR X16; .quad target+4
+ */
 static void *g_patch_target;
+static unsigned int g_orig_insn0;
 
-static int inline_patch(void *target, void *hook) {
-    unsigned long page = (unsigned long)target & ~0xFFFUL;
-    if (sys_mprotect((void *)page, 0x2000, PROT_READ | PROT_WRITE | PROT_EXEC) < 0)
-        return -1;
+static long sys_munmap(void *addr, long len) {
+    register long x0 __asm__("x0") = (long)addr;
+    register long x1 __asm__("x1") = len;
+    register long x8 __asm__("x8") = __NR_munmap;
+    __asm__ volatile("svc 0" : "+r"(x0) : "r"(x1), "r"(x8) : "memory");
+    return x0;
+}
 
-    g_patch_target = target;
-    my_memcpy(g_saved_prologue, target, 16);
-
-    /* Prepare hook redirect: LDR X16, [PC, #8]; BR X16; <hook_addr> */
-    unsigned int ldr_x16 = 0x58000050;
-    unsigned int br_x16  = 0xD61F0200;
-    unsigned long hook_addr = (unsigned long)hook;
-    my_memcpy(g_hook_patch, &ldr_x16, 4);
-    my_memcpy(g_hook_patch + 4, &br_x16, 4);
-    my_memcpy(g_hook_patch + 8, &hook_addr, 8);
-
-    /* Apply hook redirect */
-    my_memcpy(target, g_hook_patch, 16);
-    flush_icache(target, 16);
-
+/* An RWX-then-RX page within ±112MB of `near`, so a `B` reaches it. 0 on fail. */
+static void *map_stub_near(unsigned long near) {
+    static const long deltas[] = {
+        -0x200000L, 0x200000L, -0x2000000L, 0x2000000L, -0x6000000L, 0x6000000L
+    };
+    for (int i = 0; i < 6; i++) {
+        unsigned long hint = (near + deltas[i]) & ~0xFFFUL;
+        void *p = sys_mmap((void *)hint, 0x1000, PROT_READ | PROT_WRITE,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (p == MAP_FAILED) continue;
+        long off = (long)((unsigned long)p - near);
+        if (off > -0x7000000L && off < 0x7000000L) return p;
+        sys_munmap(p, 0x1000);
+    }
     return 0;
 }
 
-/* Restore-call-repatch: avoids trampoline relocation of PC-relative insns */
-static int call_real_push_frame(void *dh, int plane, void *fb) {
-    my_memcpy(g_patch_target, g_saved_prologue, 16);
-    flush_icache(g_patch_target, 16);
-    int ret = ((push_frame_fn_t)g_patch_target)(dh, plane, fb);
-    my_memcpy(g_patch_target, g_hook_patch, 16);
-    flush_icache(g_patch_target, 16);
-    return ret;
+/* Install the detour; returns the call-original trampoline, or 0 on failure
+ * (caller then falls back to LD_PRELOAD interposition only — never a crash). */
+static push_frame_fn_t install_hook(void *target, void *hook) {
+    unsigned int *t = (unsigned int *)target;
+    unsigned int insn0 = t[0];
+
+    void *stub = map_stub_near((unsigned long)target);
+    if (!stub) { NTLOG("hook: no stub page in range"); return 0; }
+
+    unsigned int *s = (unsigned int *)stub;
+    int i = 0;
+
+    /* call-original trampoline: replay insn0, then continue at target+4 */
+    push_frame_fn_t call_orig = (push_frame_fn_t)&s[i];
+    s[i++] = insn0;
+    s[i++] = 0x58000050;                     /* ldr x16,[pc,#8] */
+    s[i++] = 0xD61F0200;                     /* br  x16         */
+    *(unsigned long *)&s[i] = (unsigned long)target + 4; i += 2;
+
+    /* entry veneer: reach our hook anywhere in the address space */
+    unsigned int *veneer = &s[i];
+    s[i++] = 0x58000050;                     /* ldr x16,[pc,#8] */
+    s[i++] = 0xD61F0200;                     /* br  x16         */
+    *(unsigned long *)&s[i] = (unsigned long)hook; i += 2;
+
+    sys_mprotect(stub, 0x1000, PROT_READ | PROT_EXEC);
+    flush_icache(stub, i * 4);
+
+    long off = (long)((unsigned long)veneer - (unsigned long)target);
+    if (off <= -0x8000000L || off >= 0x8000000L) { NTLOG("hook: veneer out of B range"); return 0; }
+    unsigned int b_insn = 0x14000000u | ((unsigned int)(off >> 2) & 0x03FFFFFFu);
+
+    unsigned long page = (unsigned long)target & ~0xFFFUL;
+    if (sys_mprotect((void *)page, 0x2000, PROT_READ | PROT_WRITE | PROT_EXEC) < 0) {
+        NTLOG("hook: mprotect target failed"); return 0;
+    }
+    g_patch_target = target;
+    g_orig_insn0 = insn0;
+    __atomic_store_n(t, b_insn, __ATOMIC_RELEASE);   /* single aligned store */
+    flush_icache(target, 4);
+
+    return call_orig;
 }
 
 /* ---- DMA-buf framebuffers ---- */
@@ -356,28 +411,106 @@ static volatile unsigned int g_inject_last_counter = 0;
 static volatile int g_inject_active = 0;
 static volatile int g_inject_frames = 0;
 
+/* experiment instrumentation (used by cleanup + hook) */
+static volatile int g_exited_once = 0;
+static volatile int g_post_exit_pushes = 0;
+
+static int g_push_count = 0;
+
 static void start_inject_thread(void);
+
+/* Write one key press+release (with SYN reports) to /dev/input/event0. */
+static void emit_key(int fd, unsigned short code) {
+    struct input_event_t ev[4] = {
+        { 0, 0, EV_KEY, code, 1 },
+        { 0, 0, 0 /*EV_SYN*/, 0, 0 },
+        { 0, 0, EV_KEY, code, 0 },
+        { 0, 0, 0, 0, 0 },
+    };
+    sys_write(fd, &ev[0], sizeof(ev[0]));
+    sys_write(fd, &ev[1], sizeof(ev[1]));
+    struct timespec_t t = { 0, 40000000 };   /* 40ms hold */
+    sys_nanosleep(&t, 0);
+    sys_write(fd, &ev[2], sizeof(ev[2]));
+    sys_write(fd, &ev[3], sizeof(ev[3]));
+}
+
+/* Force a UI repaint after an app exits. The GUI is a reactive EW scene that
+ * only paints on invalidation, so we feed it an input event. We use BACK, NOT
+ * ENTER: on the menu the just-exited app is the highlighted item, and ENTER
+ * would re-launch it (observed: Doom relaunched, PC Stream bounced to restart).
+ * BACK navigates back / to home — it still dirties the scene (→ repaint) but
+ * never activates an item. Retried until the GUI actually pushes a frame
+ * (g_post_exit_pushes advances), so it survives the app's event0 grab lingering
+ * a few ms after death; if it never wakes, the caller falls back to a restart. */
+static int inject_ui_repaint(void) {
+    int fd = (int)sys_openat(AT_FDCWD, "/dev/input/event0", 1 /*O_WRONLY*/, 0);
+    if (fd < 0) { NTLOG("repaint: open event0 failed"); return 0; }
+
+    struct timespec_t settle = { 0, 150000000 };   /* grab fully released */
+    sys_nanosleep(&settle, 0);
+
+    /* If the GUI already repainted on its own (happens right after a fresh
+     * dji_glasses start), leave it be — don't navigate. */
+    struct timespec_t probe = { 0, 300000000 };
+    sys_nanosleep(&probe, 0);
+    if (g_post_exit_pushes > 0) { sys_close(fd); NTLOG("repaint: self-recovered"); return 1; }
+
+    struct timespec_t wait = { 0, 250000000 };
+    int woke = 0;
+    for (int tries = 0; tries < 8; tries++) {
+        emit_key(fd, 158);            /* KEY_BACK → navigate back, dirties the scene, never launches */
+        sys_nanosleep(&wait, 0);
+        if (g_post_exit_pushes > 0) { woke = 1; break; }
+    }
+    sys_close(fd);
+    NTLOG_INT("repaint: woke=", woke);
+    return woke;
+}
 
 static void overlay_cleanup(void) {
     NTLOG("cleanup: stopping overlay");
     g_inject_active = 0;
     if (g_inject_fd >= 0) { sys_close(g_inject_fd); g_inject_fd = -1; }
+    g_inject_last_counter = 0;   /* reset so the next launch starts clean */
 
-    /* Clear DMA-bufs so splash doesn't persist after inject stops */
-    int fbc = __atomic_load_n(&g_fb_count, __ATOMIC_ACQUIRE);
-    for (int i = 0; i < fbc; i++)
-        natartos_memset(g_framebuffers[i], 0, FRAME_SIZE);
-    NTLOG_INT("cleanup: cleared fbs=", fbc);
+    /* NOTE: do NOT zero the DMA-bufs here — the display controller does not
+     * refill a zeroed buffer on its own after inject stops, which left a black
+     * screen on exit. Leaving the last frame in place lets the resuming real
+     * push_frame overwrite it with live UI (or, worst case, a frozen last
+     * frame — still better than black). */
 
     typedef int (*system_fn)(const char *);
     system_fn sys_fn = g_dlsym ? (system_fn)g_dlsym(RTLD_DEFAULT, "system") : 0;
-    if (sys_fn) {
-        sys_fn("kill $(pidof doom_goggles) 2>/dev/null; "
-               "kill $(pidof fb_receiver) 2>/dev/null; "
-               "rm -f /data/local/tmp/fb_override /data/local/tmp/fb_shared "
-               "/data/local/tmp/fb_stop");
-    }
 
+    if (!sys_fn) { NTLOG("cleanup: no system()"); return; }
+
+    /* Kill the app and BLOCK until it is really gone: the app runs in its own
+     * process and holds an EVIOCGRAB on the input device, so until it dies our
+     * synthetic input is swallowed instead of reaching the GUI. */
+    sys_fn("kill -9 $(pidof doom_goggles) 2>/dev/null; "
+           "kill -9 $(pidof fb_receiver) 2>/dev/null; "
+           "rm -f /data/local/tmp/fb_override /data/local/tmp/fb_shared "
+           "/data/local/tmp/fb_stop; "
+           "i=0; while pidof doom_goggles >/dev/null 2>&1 && [ $i -lt 40 ]; "
+           "do usleep 25000; i=$((i+1)); done");
+    g_post_exit_pushes = 0;
+    g_exited_once = 1;
+
+    /* Fast path: force the GUI to re-render the now-unoccluded home UI in
+     * process. The compositor only paints on scene invalidation and the app's
+     * exit invalidates nothing, so we synthesize real input on the GUI's own
+     * event thread (in-band, thread-safe — unlike the EW cross-thread call that
+     * hung): ENTER wakes/opens the menu, BACK returns to a clean home. ~1-2s. */
+    if (inject_ui_repaint()) { NTLOG("cleanup: clean in-process exit OK"); return; }
+
+    /* Fallback: the poke didn't wake the GUI (input-delivery timing is not 100%
+     * reliable). Restart dji_glasses — slower (~10s) but always restores the UI,
+     * so a failed poke never leaves a frozen screen. inject.sh treats the
+     * natartos_restart flag as an intentional (non-crash) respawn. */
+    NTLOG("cleanup: poke failed -> restart fallback");
+    sys_fn("touch /data/local/tmp/natartos_restart; "
+           "(sleep 1; kill $(pidof dji_glasses)) >/dev/null 2>&1 &");
     NTLOG("cleanup: done");
 }
 
@@ -386,27 +519,24 @@ static void *inject_thread_fn(void *arg) {
     NTLOG("inject thr: start");
     struct timespec_t ts = { 0, 16666666 };
     int logged_fb = 0;
-    int check_counter = 0;
 
     while (1) {
         sys_nanosleep(&ts, 0);
         if (!g_inject_active) break;
         if (g_inject_fd < 0) continue;
 
-        check_counter++;
-        if ((check_counter & 0x7F) == 0) {
-            if (sys_faccessat(AT_FDCWD, "/data/local/tmp/fb_override", 0) != 0) {
-                NTLOG("inject thr: fb_override gone");
-                overlay_cleanup();
-                break;
-            }
+        /* Stop promptly — checked every frame, so exit latency is <100ms:
+         *   fb_stop present  → explicit stop (web / BACK button / SIGUSR1)
+         *   fb_override gone → the streaming app exited on its own */
+        if (sys_faccessat(AT_FDCWD, "/data/local/tmp/fb_stop", 0) == 0) {
+            NTLOG("inject thr: fb_stop");
+            overlay_cleanup();
+            break;
         }
-        if ((check_counter & 0x7F) == 1) {
-            if (sys_faccessat(AT_FDCWD, "/data/local/tmp/fb_stop", 0) == 0) {
-                NTLOG("inject thr: fb_stop found");
-                overlay_cleanup();
-                return 0;
-            }
+        if (sys_faccessat(AT_FDCWD, "/data/local/tmp/fb_override", 0) != 0) {
+            NTLOG("inject thr: fb_override gone");
+            overlay_cleanup();
+            break;
         }
 
         int fbc = __atomic_load_n(&g_fb_count, __ATOMIC_ACQUIRE);
@@ -419,7 +549,6 @@ static void *inject_thread_fn(void *arg) {
         unsigned int counter = 0;
         sys_pread64(g_inject_fd, &counter, 4, 0);
         if (counter == 0) continue;
-        int new_frame = (counter != g_inject_last_counter);
         g_inject_last_counter = counter;
 
         long total = 0;
@@ -482,7 +611,63 @@ static void start_watcher_thread(void) {
     NTLOG_INT("watcher: pthread_create ret=", ret);
 }
 
-static int g_push_count = 0;
+/* ---- BACK-button exit: hold BACK to leave an overlay app ----
+ *
+ * The menu-launched apps (Doom, PC Stream) have no way back to the goggles UI
+ * on their own. This thread watches the physical BACK key (gpio_keys, code 158
+ * on event0) and, WHILE an app is active (fb_override present), a long hold
+ * (>=1.5s) drops fb_stop → the inject thread tears the app down and the UI
+ * returns. Short BACK presses still reach the app (Doom USE/ESC) untouched.
+ */
+#define O_NONBLOCK  0x800
+#define BACK_EXIT_MS 1500
+
+static long now_ms_mono(void) {
+    struct timespec_t t;
+    sys_clock_gettime(CLOCK_MONOTONIC, &t);
+    return (long)t.tv_sec * 1000 + t.tv_nsec / 1000000;
+}
+
+static void *back_watcher_thread_fn(void *arg) {
+    (void)arg;
+    NTLOG("back watcher: start");
+    struct timespec_t ts = { 0, 50000000 };   /* 50ms idle poll */
+    int fd = -1;
+    int pressed = 0;
+    long press_ms = 0;
+    while (1) {
+        if (fd < 0) {
+            fd = (int)sys_openat(AT_FDCWD, "/dev/input/event0", O_RDONLY | O_NONBLOCK, 0);
+            if (fd < 0) { sys_nanosleep(&ts, 0); continue; }
+        }
+        struct input_event_t ev;
+        while (sys_read(fd, &ev, sizeof(ev)) == (long)sizeof(ev)) {
+            if (ev.type == EV_KEY && ev.code == KEY_BACK) {
+                if (ev.value == 1) { pressed = 1; press_ms = now_ms_mono(); }
+                else if (ev.value == 0) { pressed = 0; }
+            }
+        }
+        /* Only fire while an app owns the screen. */
+        if (pressed && sys_faccessat(AT_FDCWD, "/data/local/tmp/fb_override", 0) == 0
+                    && now_ms_mono() - press_ms >= BACK_EXIT_MS) {
+            NTLOG("back watcher: long BACK -> fb_stop");
+            int sfd = (int)sys_openat(AT_FDCWD, "/data/local/tmp/fb_stop",
+                                      O_WRONLY | O_CREAT | O_TRUNC, 0666);
+            if (sfd >= 0) sys_close(sfd);
+            pressed = 0;
+        }
+        sys_nanosleep(&ts, 0);
+    }
+    return 0;
+}
+
+static void start_back_watcher(void) {
+    pthread_create_fn pcreate = g_dlsym ? (pthread_create_fn)g_dlsym(RTLD_DEFAULT, "pthread_create") : 0;
+    if (!pcreate) return;
+    unsigned long tid;
+    pcreate(&tid, 0, back_watcher_thread_fn, 0);
+}
+
 
 /*
  * LD_PRELOAD interposition: export this name so the dynamic linker
@@ -493,45 +678,23 @@ int duss_hal_display_push_frame(void *display_handle, int plane_id, void *frame_
     g_push_count++;
     natartos_health_signal++;
 
+    /* Wake signal for the clean exit: once overlay_cleanup has run, each real
+     * push the GUI makes means it has re-rendered → inject_ui_repaint reads
+     * this to know the in-process repaint succeeded. */
+    if (g_exited_once && !g_inject_active)
+        g_post_exit_pushes++;
+
     if (g_push_count == 1)
         NTLOG("push_frame: HOOK ALIVE");
 
-    /* Frame injection: check fb_override, open fb_shared, start inject thread */
-    static int s_shm_fd = -1;
-
-    if ((g_push_count & 0x3F) == 1) {
-        static const char SHM_PATH[] = "/data/local/tmp/fb_shared";
-        static const char OVR_FLAG[] = "/data/local/tmp/fb_override";
-        int ovr = (sys_faccessat(AT_FDCWD, OVR_FLAG, 0) == 0);
-        if (ovr && g_fb_count == 0) find_all_framebuffers();
-        if (ovr && s_shm_fd < 0) {
-            s_shm_fd = (int)sys_openat(AT_FDCWD, SHM_PATH, O_RDONLY, 0);
-            if (s_shm_fd >= 0) {
-                g_inject_fd = s_shm_fd;
-                g_inject_active = 1;
-                start_inject_thread();
-                NTLOG_INT("inject: fd=", s_shm_fd);
-            }
-        }
-    }
-
-    /* Skip push_frame when injecting — inject thread paints DMA-bufs directly */
-    if (g_inject_active) {
-        static int s_skip_logged = 0;
-        if (!s_skip_logged) { NTLOG("push_frame: SKIP (inject)"); s_skip_logged = 1; }
+    /* While injecting, the inject thread paints the scanout dmabufs directly;
+     * skip the real submit so the compositor's own frames don't fight ours
+     * (that caused flicker). push_frame returns 0 on success, so 0 is correct. */
+    if (g_inject_active)
         return 0;
-    }
 
-    if (g_real_push_frame) {
-        static int s_was_injecting = 0;
-        static int s_resume_logged = 0;
-        if (g_inject_frames > 0) s_was_injecting = 1;
-        if (s_was_injecting && !s_resume_logged) {
-            NTLOG("push_frame: RESUME passthrough");
-            s_resume_logged = 1;
-        }
+    if (g_real_push_frame)
         return g_real_push_frame(display_handle, plane_id, frame_buf);
-    }
     return 0;
 }
 
@@ -588,18 +751,20 @@ int natartos_mod_init(void *(*loader_dlsym)(void *, const char *)) {
         NTLOG("WARN: push_frame not found via RTLD_NEXT");
     } else {
         NTLOG_HEX("real push_frame=", (unsigned long)real_fn);
-        /* Inline-patch the real function to redirect to our hook */
-        if (inline_patch((void *)real_fn,
-                         (void *)duss_hal_display_push_frame) == 0) {
-            g_real_push_frame = call_real_push_frame;
-            NTLOG("inline patch: OK");
+        /* Atomic single-instruction detour; real called via trampoline. */
+        push_frame_fn_t tramp = install_hook((void *)real_fn,
+                                             (void *)duss_hal_display_push_frame);
+        if (tramp) {
+            g_real_push_frame = tramp;
+            NTLOG("hook: installed (atomic detour)");
         } else {
-            NTLOG("inline patch: FAILED (mprotect)");
-            g_real_push_frame = real_fn;
+            g_real_push_frame = real_fn;   /* LD_PRELOAD interposition only */
+            NTLOG("hook: detour unavailable, preload-only");
         }
     }
 
     NTLOG("init: starting watcher");
     start_watcher_thread();
+    start_back_watcher();
     return 0;
 }
