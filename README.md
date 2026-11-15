@@ -1,7 +1,9 @@
 # natartos
 
-A per-session mod framework for the **DJI Goggles 3**, built on top of
+A per-session mod framework for your goggles, built on top of
 [toolya](https://github.com/grom-labs/toolya)'s root.
+
+**Verified devices:** DJI Goggles 3.
 
 > **Status: v0.1.0 — per-session only.** Mods work but do not survive a reboot.
 > After every power cycle you re-enable ADB (`toolya adb --yes`) and restart
@@ -36,8 +38,8 @@ See [SECURITY.md](SECURITY.md) for the trust model.
 | `doom` | Doom | app | yes | tested |
 | `stream` | PC Stream | app | yes | tested |
 | `background` | Custom Background | theme | no | tested |
-| `audio` | Custom Audio | theme | no | tested |
-| `mute` | Audio Control | tweak | no | tested |
+| `audio` | Custom Audio | theme | no | untested |
+| `mute` | Audio Control | tweak | no | untested |
 | `input` | Key Injection | hook | no | experimental |
 | `splash` | Custom Splash | theme | no | in progress |
 
@@ -158,19 +160,15 @@ but `dlopen` loads the original content from the block device.
 
 ## If you bricked it
 
-The DJI Goggles 3 run dm-verity in mode 2 (`restart_on_corruption`) on `/system`.
-**Any write to `/system` that isn't followed by a hash-tree recalculation will
-brick the device on reboot** — the kernel restarts the instant it reads a modified
-block. Zeroing the verity metadata magic makes it worse: `/system` won't mount at
-all.
-**There is currently no known way to unbrick a DJI Goggles 3 in this state.**
-USB does not enumerate during the bootloop, DJI Assistant 2 cannot detect the
-device, and no button combination for a recovery mode has been confirmed. If you
-find a way, please open an issue — we'd love to document it.
+The goggles run dm-verity in mode 2 (`restart_on_corruption`) on `/system`: any
+write to `/system` that isn't followed by a hash-tree recalculation bricks the
+device on reboot (fast bootloop, USB does not enumerate).
 
-natartos itself **does not write to `/system`** — it only touches `/vendor` (rw) and
-`/data`. The anti-brick mechanism protects against mod crashes, not partition-level
-damage. Don't modify `/system` unless you can recalculate the verity hash tree.
+**There is currently no known way to unbrick a device in this state.** If you find
+one, please open an issue.
+
+natartos itself **does not write to `/system`** — only `/vendor` (rw) and `/data`.
+Don't modify `/system` unless you can recalculate the verity hash tree.
 
 ## Questions / help
 
