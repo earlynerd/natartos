@@ -73,12 +73,11 @@ jobs:
           cp deploy/inject.sh dist/
           chmod 644 dist/*.so
           chmod 755 dist/doom_goggles dist/fb_receiver dist/dm_noverity
-          # icons + apps
+          # icons (source assets); app binaries are built this run, not committed
           if [ -d assets/icons ]; then mkdir -p dist/icons && cp assets/icons/*.rgba dist/icons/ 2>/dev/null || true; fi
-          if [ -d assets/apps ]; then cp -r assets/apps dist/apps; fi
-          # put pre-built doom binary next to WAD
-          mkdir -p dist/apps/doom
-          cp dist/doom_goggles dist/apps/doom/ 2>/dev/null || true
+          mkdir -p dist/apps/stream dist/apps/doom
+          cp dist/fb_receiver dist/apps/stream/
+          cp dist/doom_goggles dist/apps/doom/
           cd dist
           sha256sum *.so inject.sh dm_noverity fb_receiver doom_goggles > SHA256SUMS
 

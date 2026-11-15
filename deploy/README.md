@@ -27,11 +27,3 @@ Installed files on `/vendor` survive reboots. Only start needs repeating.
 2. Rebuilds `LD_PRELOAD` path (loader + enabled mods)
 3. Starts `dji_glasses` with `LD_PRELOAD`
 4. Respawn loop: if process exits, restarts (up to 5 crashes in 120s)
-
-## Archived (non-working)
-
-The following files were part of the persistence approach and do not work:
-- `natartos.rc` — vendor init trigger (vendor `.rc` not parsed by DJI init)
-- `adb_persist.sh` — ADB re-enable at boot (depends on init trigger)
-
-See `.agent/persistence-archive/` for copies and documentation.

@@ -3,6 +3,10 @@
 *.png
 *.wad
 dist/
+# built binaries (produced by CI, never committed)
+assets/apps/stream/fb_receiver
+assets/apps/doom/doom_goggles
+tools/dm_noverity
 backups/
 .agent/
 .idea/
