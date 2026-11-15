@@ -169,6 +169,11 @@ static void pollInput(void) {
                 }
                 if (ev.code == 28) {
                     addKeyToQueue(ev.value, 0xa3);
+                    /* 5D-centre also answers "yes" to the Quit Game prompt (Doom's
+                     * confirm key is 'y', which the goggles have no button for). It
+                     * does nothing in gameplay, so this just lets centre close the
+                     * exit dialog the user already navigated to. */
+                    addKeyToQueue(ev.value, 'y');
                     if (ev.value) track_press(0xa3); else track_release(0xa3);
                 }
             }
