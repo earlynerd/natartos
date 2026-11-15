@@ -140,7 +140,7 @@ jobs:
               prov = provides_map.get(m['id'])
               if prov:
                   entry['provides'] = prov
-              if m['id'] in ('overlay', 'popen', 'menu', 'doom', 'stream'):
+              if m['id'] in ('overlay', 'popen', 'menu', 'doom', 'stream', 'background'):
                   entry['default'] = True
               mods.append(entry)
 
