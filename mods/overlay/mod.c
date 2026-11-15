@@ -548,13 +548,19 @@ static void *inject_thread_fn(void *arg) {
 
         unsigned int counter = 0;
         sys_pread64(g_inject_fd, &counter, 4, 0);
-        if (counter == 0) continue;
+        /* Only lift a frame when the producer published a NEW one. Without this
+         * the thread re-copied ~8MB + fan-out every 16.6ms (60Hz) even when
+         * fb_receiver sent nothing, wasting ~2GB/s and widening the tear window. */
+        if (counter == 0 || counter == g_inject_last_counter) continue;
         g_inject_last_counter = counter;
 
+        /* Read the published FRONT slot (counter & 1); fb_receiver wrote the
+         * other slot, so this copy can't catch a frame mid-write. */
+        long slot_off = SHM_HEADER_G + (long)(counter & 1u) * FRAME_SIZE;
         long total = 0;
         while (total < FRAME_SIZE) {
             long got = sys_pread64(g_inject_fd, (char *)g_framebuffers[0] + total,
-                                   FRAME_SIZE - total, SHM_HEADER_G + total);
+                                   FRAME_SIZE - total, slot_off + total);
             if (got <= 0) break;
             total += got;
         }

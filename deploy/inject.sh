@@ -46,6 +46,10 @@ crash_count=0
 last_reset=$(date +%s)
 
 while true; do
+    # Each fresh dji_glasses starts clean: drop runtime overlay flags a previous
+    # session (or the respawn before this one) left behind. A stale fb_stop
+    # otherwise makes the new overlay run cleanup→restart on every boot forever.
+    rm -f /data/local/tmp/fb_stop /data/local/tmp/fb_override
     PRELOAD=$(build_preload)
     export LD_PRELOAD="$PRELOAD"
     log "start dji_glasses LD_PRELOAD=$PRELOAD"

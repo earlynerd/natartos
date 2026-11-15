@@ -35,7 +35,10 @@
 #define FB_HEIGHT  1080
 #define FB_SIZE    (FB_WIDTH * FB_HEIGHT * 4)
 #define SHM_HEADER 64
-#define SHM_SIZE   (SHM_HEADER + FB_SIZE)
+/* Two pixel slots: the producer writes the back slot and publishes via the
+ * counter; the overlay reads the front slot (counter & 1). No slot is ever
+ * written and read at once, so the injected frame can't tear. */
+#define SHM_SIZE   (SHM_HEADER + 2 * FB_SIZE)
 #define SHM_PATH   "/data/local/tmp/fb_shared"
 #define FLAG_PATH  "/data/local/tmp/fb_override"
 #define LOG_PATH   "/data/local/tmp/fb_receiver.log"
@@ -118,18 +121,25 @@ static int shm_init(void) {
     return 0;
 }
 
+/* Pointer to the back pixel slot — the one the overlay is NOT currently reading. */
+static unsigned char *back_slot(void) {
+    unsigned int c = __atomic_load_n(g_shm_counter, __ATOMIC_RELAXED);
+    return g_shm_pixels + ((unsigned long)((c + 1) & 1)) * FB_SIZE;
+}
+
 static void shm_write(const unsigned char *bgra, int w, int h) {
+    unsigned char *base = back_slot();
     if (w == FB_WIDTH && h == FB_HEIGHT) {
-        memcpy(g_shm_pixels, bgra, FB_SIZE);
+        memcpy(base, bgra, FB_SIZE);
     } else {
-        memset(g_shm_pixels, 0, FB_SIZE);
+        memset(base, 0, FB_SIZE);
         float sx = (float)FB_WIDTH / w, sy = (float)FB_HEIGHT / h;
         float scale = sx < sy ? sx : sy;
         int dw = (int)(w * scale), dh = (int)(h * scale);
         int ox = (FB_WIDTH - dw) / 2, oy = (FB_HEIGHT - dh) / 2;
         for (int dy = 0; dy < dh; dy++) {
             int src_y = dy * h / dh;
-            unsigned char *dst = g_shm_pixels + ((oy + dy) * FB_WIDTH + ox) * 4;
+            unsigned char *dst = base + ((oy + dy) * FB_WIDTH + ox) * 4;
             const unsigned char *src_row = bgra + src_y * w * 4;
             for (int dx = 0; dx < dw; dx++) {
                 int src_x = dx * w / dw;
@@ -217,36 +227,37 @@ static void fill_rect(unsigned char *fb, int x, int y, int w, int h,
 }
 
 static void splash_screen(void) {
+    unsigned char *base = back_slot();
     /* Dark background */
-    fill_rect(g_shm_pixels, 0, 0, FB_WIDTH, FB_HEIGHT, 0x28, 0x22, 0x1C);
+    fill_rect(base, 0, 0, FB_WIDTH, FB_HEIGHT, 0x28, 0x22, 0x1C);
 
     /* Monitor outline */
     int mw = 320, mh = 200, mx = (FB_WIDTH - mw) / 2, my = 240;
-    fill_rect(g_shm_pixels, mx, my, mw, mh, 0x88, 0x88, 0x88);
-    fill_rect(g_shm_pixels, mx + 3, my + 3, mw - 6, mh - 6, 0x28, 0x22, 0x1C);
-    fill_rect(g_shm_pixels, (FB_WIDTH - 60) / 2, my + mh + 4, 60, 8, 0x60, 0x60, 0x60);
-    fill_rect(g_shm_pixels, (FB_WIDTH - 120) / 2, my + mh + 14, 120, 4, 0x60, 0x60, 0x60);
+    fill_rect(base, mx, my, mw, mh, 0x88, 0x88, 0x88);
+    fill_rect(base, mx + 3, my + 3, mw - 6, mh - 6, 0x28, 0x22, 0x1C);
+    fill_rect(base, (FB_WIDTH - 60) / 2, my + mh + 4, 60, 8, 0x60, 0x60, 0x60);
+    fill_rect(base, (FB_WIDTH - 120) / 2, my + mh + 14, 120, 4, 0x60, 0x60, 0x60);
 
     /* Play triangle inside monitor */
     int tcx = FB_WIDTH / 2 - 15, tcy = my + mh / 2;
     for (int dy = -20; dy <= 20; dy++) {
         int span = 30 * (20 - (dy < 0 ? -dy : dy)) / 20;
         if (span < 1) continue;
-        fill_rect(g_shm_pixels, tcx, tcy + dy, span, 1, 0xDD, 0xDD, 0xDD);
+        fill_rect(base, tcx, tcy + dy, span, 1, 0xDD, 0xDD, 0xDD);
     }
 
     /* "PC STREAM" — scale 8 */
     const char *title = "PC STREAM";
     int tw = text_w(title, 8);
-    draw_text(g_shm_pixels, title, (FB_WIDTH - tw) / 2, 500, 8, 0xFF, 0xFF, 0xFF);
+    draw_text(base, title, (FB_WIDTH - tw) / 2, 500, 8, 0xFF, 0xFF, 0xFF);
 
     /* "READY..." — scale 3 */
     const char *sub = "READY...";
     int sw = text_w(sub, 3);
-    draw_text(g_shm_pixels, sub, (FB_WIDTH - sw) / 2, 580, 3, 0x70, 0x70, 0x70);
+    draw_text(base, sub, (FB_WIDTH - sw) / 2, 580, 3, 0x70, 0x70, 0x70);
 
     /* Accent line */
-    fill_rect(g_shm_pixels, (FB_WIDTH - 300) / 2, 610, 300, 2, 0x50, 0x50, 0x50);
+    fill_rect(base, (FB_WIDTH - 300) / 2, 610, 300, 2, 0x50, 0x50, 0x50);
 
     __atomic_add_fetch(g_shm_counter, 1, __ATOMIC_RELEASE);
     logmsg("splash shown\n");
