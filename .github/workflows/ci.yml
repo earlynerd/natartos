@@ -23,11 +23,18 @@ jobs:
 
       - name: Build mods
         run: |
+          mkdir -p dist
           CC="aarch64-linux-gnu-gcc"
           CFLAGS="-shared -fPIC -O2 -fno-builtin -nostdlib"
+          # Release builds ship only ready mods — skip untested/experimental/in-progress
+          # ones and the dev template (README "Status" column is the source of truth).
+          SKIP_MODS="audio mute input splash template"
           for dir in mods/*/; do
             dir=$(basename "$dir")
             [ ! -f "mods/$dir/mod.json" ] && continue
+            if echo " $SKIP_MODS " | grep -q " $dir "; then
+              echo "[skip] $dir (not release-ready)"; continue
+            fi
             if grep -q '"so".*null' "mods/$dir/mod.json"; then
               echo "[skip] $dir (so=null)"; continue
             fi
@@ -100,7 +107,7 @@ jobs:
                   if f.endswith('.rgba') and os.path.isfile(os.path.join('icons', f)):
                       with open(os.path.join('icons', f), 'rb') as fh:
                           sha = hashlib.sha256(fh.read()).hexdigest()
-                      files.append({'file': 'icons/' + f, 'device_path': '/vendor/natartos/icons/' + f, 'mode': '0644', 'sha256': sha})
+                      files.append({'file': f, 'device_path': '/vendor/natartos/icons/' + f, 'mode': '0644', 'sha256': sha})
           # apps
           if os.path.isdir('apps'):
               for root, dirs, fnames in os.walk('apps'):
@@ -109,7 +116,7 @@ jobs:
                       mode = '0755' if os.access(rel, os.X_OK) else '0644'
                       with open(rel, 'rb') as fh:
                           sha = hashlib.sha256(fh.read()).hexdigest()
-                      files.append({'file': rel, 'device_path': '/vendor/natartos/' + rel, 'mode': mode, 'sha256': sha})
+                      files.append({'file': os.path.basename(rel), 'device_path': '/vendor/natartos/' + rel, 'mode': mode, 'sha256': sha})
 
           # mods from mod.json
           provides_map = {'overlay': 'screen', 'background': 'background', 'splash': 'splash'}
@@ -189,5 +196,17 @@ jobs:
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # Flat asset names (GitHub asset names can't contain "/"), so the web
+          # installer can match each manifest `file` basename exactly. Nested
+          # dirs (icons, apps) are uploaded flat; apps binaries dup the top-level
+          # fb_receiver/doom_goggles, so only the top-level copies are uploaded.
+          files: |
+            dist/*.so
+            dist/inject.sh
+            dist/fb_receiver
+            dist/doom_goggles
+            dist/dm_noverity
+            dist/manifest.json
+            dist/SHA256SUMS
+            dist/icons/*.rgba
           generate_release_notes: true
