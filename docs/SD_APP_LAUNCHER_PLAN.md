@@ -11,14 +11,19 @@ The first implementation provides the standalone runner and a console Hello
 package. Both build for ARM64 and pass Linux integration checks. The first
 [console bench test](SD_APP_BENCH_2026-11-16.md) also verified staging and
 execution from an internal source package on the goggles. See the
-[runner guide](SD_APP_RUNNER.md) for commands and current limits. External
-SD access, the picker, graphical Hello, and phone activation remain open.
+[runner guide](SD_APP_RUNNER.md) for commands and current limits.
+
+The second slice (2026-11-16) adds per-app More-menu entries, the display
+hand-off for `"display": true` apps, and the graphical Hello. They pass host
+tests but have not run on the goggles yet. External SD access and phone
+activation also remain open.
 
 ## First usable workflow
 
 1. Power on the goggles, connect an Android phone, and use Toolya in Chrome
    to enable ADB and start Natartos.
-2. Disconnect the cable and open **More → SD Apps** inside the goggles.
+2. Disconnect the cable and open **More** inside the goggles; each app on the
+   card has its own entry.
 3. Select an application. The launcher copies its package into internal
    storage, validates the staged copy, and starts it.
 4. Exit the application and return to a responsive DJI interface.
@@ -35,15 +40,16 @@ and bench diagnostics; the completed field workflow must work without one.
 
 | Component | Responsibility |
 | --- | --- |
-| Natartos loader and menu | Load the SD Apps mod and provide one top-level menu entry. |
-| Natartos display support | Present the picker/application and restore the DJI display afterward. |
-| SD Apps mod and picker | Discover packages, show names and errors, and request an explicit launch. |
-| Standalone app runner | Validate, stage, supervise, and clean up the selected application. |
+| Natartos loader and menu | Load the SD Apps mod; show one More-menu entry per app (limit raised from 8 to 32). |
+| Natartos display support | Overlay shows the app's frames and restores the DJI display afterward. |
+| SD Apps mod | Ask the runner for the card's apps at start-up and register their entries. |
+| Standalone app runner | Validate, stage, supervise, hand over the display, and clean up. |
 | Optional boot bootstrap | Activate Natartos automatically after a future, separate validation. |
 
-Use one **SD Apps** menu entry rather than registering every package at the
-top level. The existing menu API has eight slots. The picker should reuse
-Natartos display/input support and allow a longer application list.
+Each app is an ordinary More-menu entry, registered like Doom and PC Stream,
+rather than a list screen of our own. The eight-entry limit was only a
+constant in the menu mod; it is now 32 and SD Apps uses at most 24. The
+card is read once per `dji_glasses` start (see `DECISIONS.md`).
 
 The mod should perform little work inside `dji_glasses`. Copying files,
 parsing manifests, and waiting for child processes belong in the standalone
@@ -56,7 +62,7 @@ Relevant interfaces are in the [menu API](../include/natartos_common.h),
 [session start script](../deploy/inject.sh). Treat their current code as the
 implementation reference where the prose specification has drifted.
 
-Add build targets and release-manifest entries for the runner and picker;
+Add build targets and release-manifest entries for the runner and mod;
 the existing mod build loop alone only produces the mod library. Toolya's
 default downloads target grom-labs releases, so they will not automatically
 install this fork's additions. Use its existing local-manifest installation
@@ -157,16 +163,16 @@ until restoration of the normal view and controls is reliable.
 | --- | --- |
 | 1. Build and compatibility baseline | Pin the upstream base and an ARM64 toolchain; build the minimal mod and Hello executable. Record the actual firmware, storage, and execution context. Verify phone-assisted Natartos activation. |
 | 2. Package runner | Implement discovery, manifest validation, staging and direct execution. A Hello package on SD runs from internal storage and produces a captured success result. |
-| 3. Goggles interface | Add SD Apps, a joystick picker, and the graphical Hello example. Launch and exit work after disconnecting USB. Document the small app display/input contract. |
+| 3. Goggles interface | Add per-app More-menu entries and the graphical Hello example. Launch and exit work after disconnecting USB. Document the small app display/input contract. *(Implemented and host-tested; device check pending.)* |
 | 4. Failure handling | Handle removal/full storage, bad packages, crash/hang, cancellation and repeated launches. Fix framework recovery behavior required by these cases. |
 | 5. Field workflow | Repeat cold boot → phone activation → cable removal → app → DJI interface. Establish a reliable offline activation route before promising operation without mobile data. |
 
 The first coding change should implement the package reader/validator and
 runner with a Hello fixture. Give them configurable source/cache roots for
 host testing. Then prove staging and execution on the goggles before adding
-the picker. This keeps the first hardware experiment small.
+the menu entries. This keeps the first hardware experiment small.
 
-Suggested implementation locations are `mods/sd_apps/` for the mod, picker,
+Suggested implementation locations are `mods/sd_apps/` for the mod,
 runner and manifest code, and `examples/sd_apps/hello/` for the package example.
 Keep changes to the shared loader, menu, and overlay limited to interfaces
 or recovery fixes the new feature actually needs.

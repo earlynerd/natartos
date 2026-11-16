@@ -1,14 +1,17 @@
-# SD app runner: first implementation
+# SD app runner
 
 The standalone runner can discover directory packages, validate their
 manifests and static executables, stage a verified internal copy, and run one
-app at a time. The Hello package reads a bundled asset and records a successful
-launch in its saved-data directory.
+app at a time. Apps marked `"display": true` get the screen through the
+Natartos overlay, the same way Doom and PC Stream do, and give it back when
+they exit. The `mod_sd_apps.so` mod adds one More-menu entry per app on the
+card. The Hello package draws a screen, reacts to the joystick, and records
+each launch in its saved-data directory.
 
-This is the console/bench portion of the [launcher plan](SD_APP_LAUNCHER_PLAN.md).
-The SD Apps menu, graphical Hello, joystick handling, and DJI display handoff
-are still to be implemented. These binaries do not load a Natartos mod or
-alter the DJI interface. No vendor installation is needed for this bench step.
+See the [launcher plan](SD_APP_LAUNCHER_PLAN.md) for scope. The console
+runner has been bench-tested on the goggles; the menu entries, display
+hand-off and graphical Hello pass host tests but have **not yet run on the
+device** (see [Next device check](#next-device-check-menu-entries-and-display)).
 
 ## Build
 
@@ -36,17 +39,21 @@ Products are in `build/aarch64/`:
   `ET_EXEC` applications only.
 - `apps/hello/`: the complete SD package, including `app.json`, `bin/hello`,
   and its asset.
+- `mod_sd_apps.so`: the mod that registers one More-menu entry per SD app.
+- `hook_menu.so`: the menu mod with the raised entry limit (32) that the
+  per-app entries need; the released 0.1.0 menu allows 8.
 - `natartos_loader.so` and `mod_template.so`: build-baseline checks when
-  `--framework` is used; they are not needed to run the console sample.
+  `--framework` is used; they are not needed for SD apps.
 
 The runner and example use ordinary Linux syscalls through statically linked
-libc, avoiding the goggles' Android linker/libc dependency. Actual device
-execution and SELinux compatibility are still bench checks.
+libc, avoiding the goggles' Android linker/libc dependency. Apps that draw use
+the header-only helpers in [`include/natartos_app.h`](../include/natartos_app.h).
 
 The alternative Makefile is at `mods/sd_apps/Makefile`. CI builds a separate
-`sd-apps-bench` artifact. It does not add these early binaries to the Natartos
-release installer. The eventual menu mod and helpers need explicit installer
-manifest integration; Toolya's default upstream download will not supply them.
+`sd-apps-bench` artifact, and its release loop skips `sd_apps` (status
+"in progress" in the README). Installing the runner under
+`/vendor/natartos/apps/sd_apps/` needs installer manifest integration later;
+Toolya's default upstream download will not supply it.
 
 ## Packages and commands
 
@@ -58,7 +65,8 @@ ASCII letters, digits, dots, underscores and hyphens, separated by `/`.
 Empty components, `.`/`..`, absolute paths, links, and special files are rejected.
 
 The manifest supports `schema`, `id`, `name`, `version`, `entry`, and optional
-`args`. Unknown or duplicate fields are errors. Names/arguments support valid
+`args` and `display` (`true`/`false`, default `false`; see
+[Display apps](#display-apps)). Unknown or duplicate fields are errors. Names/arguments support valid
 UTF-8 and JSON escapes; names cannot contain control characters and no string
 can contain NUL. Maximums: 8 KiB manifest, 48-byte ID, 128-byte name,
 64-byte version, 511-byte entry path, and 16 arguments of at most 255 bytes.
@@ -81,12 +89,19 @@ It fails on missing or ambiguous mounts. Confirm the actual mount table before
 using the example path. `list` emits one JSON object per valid package and
 reports skipped invalid packages on stderr.
 
+`menu-list` prints `id<TAB>version<TAB>name` lines sorted by name, for the
+menu mod. It checks manifests and executables but skips the full-package hash
+so it stays fast, reduces names to printable ASCII (the menu's string API is
+ANSI), and stops itself after 5 seconds.
+
 `validate` reads the SD package. `stage` prints the internal cache path after
 verification. `run` stages and executes the opened internal executable with
 the package as its working directory. It passes argv directly without a shell.
 The child's environment contains only `PATH`, `LANG`, `NATARTOS_APP_ID`,
-`NATARTOS_APP_PACKAGE`, and `NATARTOS_APP_DATA`; preload hooks are not inherited.
-Standard input is `/dev/null` and stdout/stderr go to the bounded log.
+`NATARTOS_APP_PACKAGE`, and `NATARTOS_APP_DATA` (plus the display variables
+below); preload hooks are not inherited. Standard input is `/dev/null`,
+stdout/stderr go to the bounded log, and every other inherited descriptor is
+closed, since the menu starts the runner from inside `dji_glasses`.
 
 | Storage | Default |
 | --- | --- |
@@ -128,6 +143,73 @@ Exit status is the app's status, `124` for timeout, `125` for runner errors,
 or `128 + signal` for cancellation/crash. Inspect stderr and the latest log
 to distinguish runner failures from an app returning the same code.
 
+## Menu entries
+
+`mod_sd_apps.so` is an ordinary Natartos mod. When the loader calls its
+`natartos_mod_register` during `dji_glasses` start-up, it runs
+`sd_app_runner menu-list` and registers one More-menu entry per app through
+the existing `natartos_menu_register` API: the app's name, a subtitle with
+its version, and the command
+
+```sh
+nohup <runner> run <id> >/dev/null 2>>/data/local/tmp/natartos.log &
+```
+
+Entry keys are `sd:<id>`, so a card app cannot replace another mod's entry.
+The mod re-checks each id against the runner's id rules before placing it in
+the command, and registers at most 24 apps. Runner errors (for example a busy
+screen or SD permission denial) are appended to the shared Natartos log.
+
+The runner is looked up at `/vendor/natartos/apps/sd_apps/sd_app_runner`
+(future installer location), then `/data/natartos/bin/sd_app_runner` (bench).
+The card is read once per `dji_glasses` start, so apps copied later appear
+after the next `toolya natartos start`. Without a runner, an SD card, or with
+an unreadable card, the mod registers nothing and the menu is unchanged.
+
+## Display apps
+
+With `"display": true` the runner takes the screen just before starting the
+app, following the same protocol as the Doom and PC Stream launchers:
+
+1. Refuse with exit 125 if `fb_override` already exists (another app owns the
+   screen). Otherwise remove a stale `fb_stop`, create a fresh 16,588,864-byte
+   `fb_shared` (mode 0644), then create `fb_override`. `hook_overlay.so` then
+   shows frames from `fb_shared` instead of the DJI interface.
+2. Stop the app (SIGTERM, SIGKILL after 2 s, exit 143) if `fb_stop` appears or
+   `fb_override` disappears; the overlay and Toolya use these to stop apps.
+3. After the app and its process group are gone, remove `fb_override`,
+   `fb_stop` and `fb_shared`. The overlay then repaints the DJI interface by
+   injecting a BACK key, so the app's input grab must already be released.
+
+The files live in `/data/local/tmp` (`--display-dir` overrides it for tests).
+Display apps also receive:
+
+| Variable | Value |
+| --- | --- |
+| `NATARTOS_FB_PATH` | the `fb_shared` file to draw into |
+| `NATARTOS_FB_WIDTH`, `NATARTOS_FB_HEIGHT` | `1920`, `1080` |
+| `NATARTOS_INPUT_DEVICES` | colon-separated button devices (`--input`, default `/dev/input/event0:/dev/input/event3`) |
+
+The app contract, implemented by
+[`include/natartos_app.h`](../include/natartos_app.h):
+
+- **Frames:** map the existing file; never resize, truncate or zero it. Draw
+  BGRA pixels into the slot the overlay is not showing and then increment the
+  frame counter (`nat_fb_publish`). Layout: 64-byte header with a `u32`
+  counter at offset 0, then two 1920×1080×4 slots; the overlay shows slot
+  `counter & 1`.
+- **Buttons:** open the listed devices and take an exclusive `EVIOCGRAB`, as
+  Doom does, so the hidden DJI menu does not also react. `KEY_ENTER` is the
+  5D press and `KEY_BACK` is BACK. The joystick reports its directions rotated
+  180° (`nat_joystick` maps them to the wearer's view, matching the Doom port).
+- **Exit:** return from `main`, ideally on BACK *release* so the release does
+  not reach the DJI interface. Exit promptly on SIGTERM. Do not touch
+  `fb_override` or `fb_stop`.
+
+While an app holds the BACK button's device, the overlay's own hold-BACK
+exit cannot see it (the same is true for Doom), so each app needs its own
+exit. Toolya's stop (or `kill -USR1 $(pidof dji_glasses)`) still works.
+
 ## Tests
 
 On Linux:
@@ -153,12 +235,21 @@ python tools/sd_apps/run_vm_tests.py --qemu /path/to/qemu-system-x86_64 \
 Use `--arch aarch64`, the matching QEMU/kernel/initramfs, and `--build` for an
 ARM64 run. Test fixtures must also be built for that architecture. Locally,
 the production ARM64 runner and Hello binary were substituted into the ARM64
-test bundle. On 2026-11-16 all 46 integration checks passed in both x86-64 and
-ARM64 Linux guests. They cover malformed packages, path/link rejection,
-ELF compatibility, cache reuse/corruption, storage budgets, saved data,
-shell-literal argv, output limits, crashes, hangs, cancellation and cleanup.
-The added regression covers a root path with a search-only ancestor.
-The emulated Linux result does not establish DJI display or SELinux behavior.
+test bundle. On 2026-11-16 the first 46 integration checks passed in both
+x86-64 and ARM64 Linux guests. They cover malformed packages, path/link
+rejection, ELF compatibility, cache reuse/corruption, storage budgets, saved
+data, shell-literal argv, output limits, crashes, hangs, cancellation and
+cleanup, plus a root path with a search-only ancestor.
+
+The suite now has 64 checks. The additions cover the menu listing, the SD
+Apps mod (`mod_check` compiles `mods/sd_apps/mod.c` for the host against
+`tests/sd_apps/shim/natartos_common.h`, feeds it the runner's real listing and
+crafted unsafe lines, and runs the command it registers), descriptor closing,
+and the display hand-off driven through a FIFO standing in for the buttons:
+BACK exit, a busy screen, both overlay stop paths, an app ignoring SIGTERM,
+and a crash. All 64 passed on x86-64 Linux (WSL) with both the Zig/musl and
+GCC 13/glibc builds; the ARM64 VM run has not been repeated. Host tests do not
+establish DJI display, menu (Embedded Wizard) or SELinux behavior.
 
 ## First device check
 
@@ -189,9 +280,8 @@ afterward so a later power interruption does not obscure that observation.
    security automatically. Cleanup removes only the runner, its dedicated
    cache/data directories, and the Hello SD package if desired.
 
-Once this succeeds, implement the SD Apps menu/picker and graphical Hello
-using the existing overlay/input support. Verify return to DJI's video and
-controls separately; this console sample does not exercise display ownership.
+This console check did not exercise display ownership or the menu; see the
+next section for those.
 
 ## SD access after disconnecting USB
 
@@ -209,3 +299,44 @@ internal Hello test, but direct SD reads remain blocked in that session.
 Review the intended Natartos runtime permission setup before treating SD
 launching as ready. This probe does not apply that setup or change security
 settings. See the [bench results](SD_APP_BENCH_2026-11-16.md).
+
+## Next device check: menu entries and display
+
+Not yet performed. Use a charged battery, outside flight operation, with the
+current firmware and mounts re-confirmed. Nothing here writes to `/system`.
+
+**Stage A: display hand-off from ADB (no `/vendor` changes).** Requires an
+active Natartos session with the overlay mod (`toolya natartos start`; the
+log `/data/local/tmp/natartos.log` shows `hook_overlay loaded`).
+
+1. Replace `/data/local/tmp/sd_app_runner` with the new build (check its
+   SHA-256 against `build-info.json`) and copy the new Hello package, whose
+   manifest has `"display": true`, to `/data/local/tmp/natartos-bench/apps/hello`.
+2. Confirm `/data/local/tmp/fb_override` does not exist, then run
+   `sd_app_runner --apps /data/local/tmp/natartos-bench/apps --timeout 60 run hello`.
+   The timeout is a safety net: it stops Hello and returns the screen even if
+   no button works.
+3. Check: Hello appears; up/down/left/right move the highlight the way the
+   joystick is pushed (if inverted, fix `nat_joystick` only); the 5D press
+   changes colour; BACK returns a responsive DJI interface. Repeat three times.
+4. If the screen stays on Hello: `touch /data/local/tmp/fb_stop` from ADB, or
+   wait for the timeout. The overlay restarts `dji_glasses` if its repaint
+   fails.
+
+**Stage B: menu entries.** Needs the new `hook_menu.so` (32 entries) and
+`mod_sd_apps.so` in `/vendor/natartos/mods/` with
+`/vendor/natartos/enabled/mod_sd_apps.so`, and the runner at
+`/data/natartos/bin/sd_app_runner` (directory owned by root, mode 0700).
+Install them with Natartos's own mechanism (Toolya local manifest) and keep a
+copy of the released `hook_menu.so` for rollback; agree the exact steps
+before writing under `/vendor`.
+
+1. After `toolya natartos start`, the log should show `[sd_apps] SD app
+   entries: N` and `[menu] register: added` for each `sd:` entry.
+2. Open More: each app appears after Doom and PC Stream. With more than
+   eight entries, confirm the list scrolls and every entry launches.
+3. SD access: the earlier root session was denied (see above). If the
+   listing reports a permission error under the Natartos session, stop and
+   investigate the session's permission setup rather than changing policy.
+4. Rollback: restore the released `hook_menu.so`, remove `mod_sd_apps.so`
+   and its `enabled` marker, and start Natartos again.
