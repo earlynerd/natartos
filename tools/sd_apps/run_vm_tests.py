@@ -37,7 +37,7 @@ def main():
     for item in sorted(build.rglob("*")):
         # Only include product binaries/packages, not toolchain caches.
         relative = item.relative_to(build)
-        if relative.parts[0] not in {"apps", "fixture", "hash_check", "sd_app_runner"}:
+        if relative.parts[0] not in {"apps", "fixture", "hash_check", "mod_check", "sd_app_runner"}:
             continue
         name = "sd-tests/build/" + relative.as_posix()
         if item.is_dir(): entries.append((name, b"", stat.S_IFDIR | 0o755))

@@ -42,6 +42,7 @@ See [SECURITY.md](SECURITY.md) for the trust model.
 | `mute` | Audio Control | tweak | no | untested |
 | `input` | Key Injection | hook | no | experimental |
 | `splash` | Custom Splash | theme | no | in progress |
+| `sd_apps` | SD Apps | app | no | in progress |
 
 Mods are opt-in — you choose which to install. Each mod is a standalone `.so`
 loaded by the loader. To write your own, see [MOD_SPEC.md](MOD_SPEC.md) and the

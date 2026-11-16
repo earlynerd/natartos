@@ -189,6 +189,45 @@ grep -q 'skip broken' "$T/err"
 rm -r "$T/apps/broken"
 restore
 
+# ---- mod_sd_apps.so logic: listing -> menu entries -> launch command ----
+mod_check() { (cd "$T" && "$B/mod_check" "$@"); }
+cat >"$T/sd-runner" <<EOF
+#!/bin/sh
+exec "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" "\$@"
+EOF
+chmod 755 "$T/sd-runner"
+expect 0 'SD Apps mod registers one entry per app' mod_check
+[ "$(cat "$T/out")" = "$(printf 'sd:hello\tHello Goggles\tSD card app 0.1.0\t300\tnohup ./sd-runner run hello >/dev/null 2>>/dev/null &')" ]
+before=$(wc -l <"$T/data/hello/launches.txt")
+(cd "$T" && sh -c "$(cut -f5 "$T/out")")
+launched() { [ "$(wc -l <"$T/data/hello/launches.txt")" -gt "$before" ]; }
+wait_until launched
+wait_until "$R" --cache "$T/cache" clean hello   # succeeds once that runner has exited
+expect 0 'registered menu command launches the app' launched
+cat >"$T/sd-runner" <<'EOF'
+#!/bin/sh
+printf 'doom\t1\tNot Doom\n'
+printf 'bad;id\t1\tEvil\n'
+printf 'Upper\t1\tEvil\n'
+printf 'two\ttabs\tin\tname\n'
+printf 'ok\t2\tGood\n'
+printf 'cut\t1\tNo newline'
+EOF
+expect 0 'SD Apps mod skips unsafe listing lines' mod_check
+[ "$(cut -f1 "$T/out" | tr '\n' ' ')" = "sd:doom sd:ok " ]
+cat >"$T/sd-runner" <<'EOF'
+#!/bin/sh
+i=0; while [ $i -lt 30 ]; do printf 'app%d\t1\tApp %d\n' $i $i; i=$((i+1)); done
+EOF
+expect 0 'SD Apps mod caps its entries' mod_check
+[ "$(wc -l <"$T/out")" -eq 24 ]
+expect 0 'SD Apps mod stops when the menu is full' mod_check 3
+[ "$(wc -l <"$T/out")" -eq 3 ]
+grep -q 'menu full' "$T/err"
+rm "$T/sd-runner"
+expect 0 'SD Apps mod without a runner registers nothing' mod_check
+[ ! -s "$T/out" ]
+
 # ---- Descriptors: a runner started from dji_glasses must not leak its files ----
 cp "$B/fixture" "$T/apps/hello/bin/hello"
 manifest '["fds"]'
