@@ -41,7 +41,7 @@ jobs:
           CFLAGS="-shared -fPIC -O2 -fno-builtin -nostdlib"
           # Release builds ship only ready mods — skip untested/experimental/in-progress
           # ones and the dev template (README "Status" column is the source of truth).
-          SKIP_MODS="audio mute input splash template"
+          SKIP_MODS="audio mute input sd_apps splash template"
           for dir in mods/*/; do
             dir=$(basename "$dir")
             [ ! -f "mods/$dir/mod.json" ] && continue
