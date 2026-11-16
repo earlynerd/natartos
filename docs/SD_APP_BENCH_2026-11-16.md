@@ -123,3 +123,72 @@ discovery and loading, the graphical picker, display/input ownership, phone
 activation, and automatic launcher startup after reboot have not yet been
 validated by this test. The owner's successful-boot report above does not
 establish those launcher behaviors.
+
+## Display hand-off check (Stage A) — afternoon
+
+The owner installed Natartos with Toolya at 14:42 (six default mods under
+`/vendor/natartos`: loader, background, menu, overlay, popen, Doom, PC
+Stream). The install ran `inject.sh` once; `dji_glasses` later restarted
+without Natartos at 14:47:49 (cause not recorded). The owner had not started
+Natartos for this test. Nothing in these steps wrote to `/system`.
+
+The new runner (`ad4179f8…`) and the display-mode Hello package (manifest
+`"display": true`, `bin/hello` `a6a6e52a…`, package fingerprint
+`b546a31d…`) were transferred under temporary names, checked against
+`build-info.json`, then swapped into `/data/local/tmp/sd_app_runner` and the
+**internal** bench folder `/data/local/tmp/natartos-bench/apps`. `menu-list`,
+`validate` and `stage` succeeded there. Both button devices (`gpio_keys` on
+event0, `omc_keys` on event3) opened from the ADB root session.
+
+**SD access:** at about 14:50, between the stock restart and the owner's
+Natartos start, `sd_app_runner menu-list` with automatic card discovery
+failed with `open directory: Permission denied`. Neither run below read the
+SD card; the "came from the SD package" line in Hello's asset was fixed text
+(now reworded).
+
+| Run | Result |
+| --- | --- |
+| 14:51 (Natartos not active) | Nothing appeared; the DJI menu looked frozen because Hello held the buttons. BACK closed Hello (exit 0) and the buttons returned. Flags cleaned up. See the debug log. |
+| 14:55:19–14:55:43 (owner started Natartos at 14:54) | The overlay opened `fb_shared` and showed Hello. Joystick navigation matched DJI's own menu directions (`nat_joystick` mapping confirmed); four 5D presses registered; BACK closed Hello (exit 0) and all flags were removed. |
+
+After the second run the overlay's in-process repaint failed (`repaint:
+woke=0`); the owner heard about five beeps, consistent with the overlay's
+injected BACK presses, and the screen went dark while the overlay's
+fallback restarted `dji_glasses` (14:55:49; Natartos active again by
+14:55:59). The owner confirmed a normal display afterwards. What was on
+screen before Hello appeared is unknown (Hello was already showing when the
+owner put the goggles on). A Doom tap from the More menu during the 14:42
+session had exited with `repaint: woke=1`.
+
+Device writes: the runner and bench package replaced, one new cache entry,
+two Hello launch records (five in total), and the transient overlay files,
+which were removed. The local adb server was stopped after each step.
+
+## SD access with a Natartos session
+
+At 15:06, with the 14:54 Natartos session still running, read-only checks
+showed:
+
+- `/sys/fs/selinux/enforce` is `0` (permissive), as Toolya's Natartos start
+  intends. `getenforce` itself is still refused in the `su` context.
+- Under Natartos, `dji_glasses` runs as `u:r:su:s0` with the same uid,
+  groups and capabilities as the ADB root shell, so ADB tests represent what
+  a menu-launched runner gets. Stock `dji_glasses` is not visible from `su`.
+- The card is reachable only at `/mnt/media_rw/sdcard0` (exFAT, label
+  `exfat`, owner `media_rw`, mode 0770); there are no `/storage` or
+  `/mnt/runtime` views.
+- Listing the card root now succeeds (file names were not recorded), and
+  `sd_app_runner menu-list` discovers the card and reports that
+  `natartos/apps` does not exist yet.
+
+So the earlier denials coincided with SELinux enforcing, and the card is
+readable once Natartos has made SELinux permissive. Whether enforcing mode
+denies the `exfat` label or root's permission override was not separated.
+
+One unintended write: a leftover redirection in the probe script created an
+empty file `/mnt/media_rw/sdcard0.err` (tmpfs, not the card). It was
+confirmed empty and removed at once.
+
+Still open: launching a package from the card (no `natartos/apps` on it
+yet), a clean (no-restart) return when launched from a menu entry, and
+Stage B (menu entries).

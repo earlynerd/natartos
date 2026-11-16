@@ -8,10 +8,12 @@ they exit. The `mod_sd_apps.so` mod adds one More-menu entry per app on the
 card. The Hello package draws a screen, reacts to the joystick, and records
 each launch in its saved-data directory.
 
-See the [launcher plan](SD_APP_LAUNCHER_PLAN.md) for scope. The console
-runner has been bench-tested on the goggles; the menu entries, display
-hand-off and graphical Hello pass host tests but have **not yet run on the
-device** (see [Next device check](#next-device-check-menu-entries-and-display)).
+See the [launcher plan](SD_APP_LAUNCHER_PLAN.md) for scope. On the goggles,
+the console runner and the display hand-off with the graphical Hello have
+been bench-tested from an internal package folder (see the
+[bench results](SD_APP_BENCH_2026-11-16.md)). The card is readable during a
+Natartos session, but no package has been launched from it yet, and the
+menu entries have **not yet run on the device** (see [Next device check](#next-device-check-menu-entries-and-display)).
 
 ## Build
 
@@ -294,20 +296,29 @@ not a physical connection indicator; correlate samples with host connection
 events and the owner's observation.
 
 The first such test completed all 60 samples and still received permission
-denials during unplugged operation. Root ADB is sufficient for the verified
-internal Hello test, but direct SD reads remain blocked in that session.
-Review the intended Natartos runtime permission setup before treating SD
-launching as ready. This probe does not apply that setup or change security
-settings. See the [bench results](SD_APP_BENCH_2026-11-16.md).
+denials during unplugged operation. That session had no Natartos session,
+so SELinux was presumably enforcing. With Natartos started (Toolya sets
+SELinux permissive for the session; `/sys/fs/selinux/enforce` reads `0`), the
+card root at `/mnt/media_rw/sdcard0` is readable from the same `su` context
+that Natartos runs `dji_glasses` in. SD launching therefore depends on an
+active Natartos session. This probe does not change security settings. See
+the [bench results](SD_APP_BENCH_2026-11-16.md).
 
 ## Next device check: menu entries and display
 
-Not yet performed. Use a charged battery, outside flight operation, with the
-current firmware and mounts re-confirmed. Nothing here writes to `/system`.
+Stage A was performed on 2026-11-16 (see the bench results): Hello was shown,
+the joystick mapping matched DJI's menu, and BACK exited, but the overlay
+fell back to restarting `dji_glasses` to repaint the UI. Stage B is still
+open. Use a charged battery, outside flight operation, with the current
+firmware and mounts re-confirmed. Nothing here writes to `/system`.
 
 **Stage A: display hand-off from ADB (no `/vendor` changes).** Requires an
-active Natartos session with the overlay mod (`toolya natartos start`; the
-log `/data/local/tmp/natartos.log` shows `hook_overlay loaded`).
+active Natartos session with the overlay mod (`toolya natartos start`). The
+log `/data/local/tmp/natartos.log` survives a `dji_glasses` restart, so
+confirm its latest loader start (`hook_overlay loaded`, `HOOK ALIVE`) is newer
+than the current `dji_glasses` (modification time of `/dev/input/event3`).
+Without the overlay, a display app holds the buttons with nothing on screen
+until BACK.
 
 1. Replace `/data/local/tmp/sd_app_runner` with the new build (check its
    SHA-256 against `build-info.json`) and copy the new Hello package, whose
