@@ -516,8 +516,10 @@ static void close_inherited(int keep) {
 #define STRINGIFY_(x) #x
 #define STRINGIFY(x) STRINGIFY_(x)
 
-static int run_app(int package_fd, const char *package, const char *data, app_manifest *m, int logs,
-                   unsigned timeout, display_ctx *display) {
+/* `source` is the package directory the app was staged from (e.g. on the SD
+ * card); the app runs from the verified internal copy at `package`. */
+static int run_app(int package_fd, const char *package, const char *source, const char *data,
+                   app_manifest *m, int logs, unsigned timeout, display_ctx *display) {
     int executable_fd = entry_open(package_fd, m->entry);
     if (executable_fd < 0) return -1;
     int log = regular(logs, "last-run.log", O_WRONLY | O_CREAT, 0600);
@@ -539,11 +541,13 @@ static int run_app(int package_fd, const char *package, const char *data, app_ma
         if (pipefd[1] > STDERR_FILENO) close(pipefd[1]);
         char executable[PATH_MAX], package_env[PATH_MAX + 32], data_env[PATH_MAX + 32];
         char id_env[APP_ID_MAX + 32], fb_env[PATH_MAX + 32], input_env[PATH_MAX + 32];
+        char source_env[PATH_MAX + 32];
         if (snprintf(executable, sizeof(executable), "%s/%s", package, m->entry) >= (int)sizeof(executable)) _exit(126);
         snprintf(package_env, sizeof(package_env), "NATARTOS_APP_PACKAGE=%s", package);
         snprintf(data_env, sizeof(data_env), "NATARTOS_APP_DATA=%s", data);
         snprintf(id_env, sizeof(id_env), "NATARTOS_APP_ID=%s", m->id);
-        char *env[10];
+        snprintf(source_env, sizeof(source_env), "NATARTOS_APP_SOURCE=%s", source);
+        char *env[12];
         unsigned envc = 0;
 #ifdef SD_APPS_HOST_TEST
         env[envc++] = "PATH=/usr/bin:/bin";
@@ -554,6 +558,7 @@ static int run_app(int package_fd, const char *package, const char *data, app_ma
         env[envc++] = package_env;
         env[envc++] = data_env;
         env[envc++] = id_env;
+        env[envc++] = source_env;
         if (display) {
             snprintf(fb_env, sizeof(fb_env), "NATARTOS_FB_PATH=%s", display->frame);
             snprintf(input_env, sizeof(input_env), "NATARTOS_INPUT_DEVICES=%s", display->inputs);
@@ -898,8 +903,11 @@ int main(int argc, char **argv) {
     int app_data = directory(data, id, 1);
     if (app_data < 0) goto done;
     close(app_data);
-    char save[PATH_MAX];
+    char save[PATH_MAX], source_path[PATH_MAX];
     if (snprintf(save, sizeof(save), "%s/%s", data_abs, id) >= (int)sizeof(save)) { fail("data path too long"); goto done; }
+    if (snprintf(source_path, sizeof(source_path), "%s/%s", apps_abs, id) >= (int)sizeof(source_path)) {
+        fail("source path too long"); goto done;
+    }
     logs = directory(cache, "logs", 1);
     if (logs < 0) goto done;
     staged = directory(app, digest, 0);
@@ -908,7 +916,8 @@ int main(int argc, char **argv) {
     /* Claim the screen only once the verified copy is ready to execute. */
     if (manifest.display && display_claim(&display, display_dir, inputs)) goto done;
     fflush(stdout);
-    rc = run_app(staged, package, save, &manifest, logs, timeout, manifest.display ? &display : NULL);
+    rc = run_app(staged, package, source_path, save, &manifest, logs, timeout,
+                 manifest.display ? &display : NULL);
     display_release(&display);
 done:
     if (rc < 0) fprintf(stderr, "sd_app_runner: %s\n", *error ? error : "operation failed");

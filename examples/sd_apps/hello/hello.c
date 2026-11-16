@@ -24,9 +24,19 @@ static void on_stop(int sig) { (void)sig; stop_requested = 1; }
 
 typedef struct {
     char message[256];
+    const char *source;   /* package folder the runner staged from */
     unsigned launches, presses;
     int col, row, colour;
 } hello_state;
+
+/* The runner says where the package came from; the SD card is the external
+ * FAT/exFAT volume under /mnt/media_rw (not the internal "emulated" one). */
+static const char *source_place(const char *source) {
+    if (!source || !*source) return "Loaded from an unknown location";
+    if (!strncmp(source, "/mnt/media_rw/", 14) && strncmp(source, "/mnt/media_rw/emulated", 22))
+        return "Loaded from the SD card";
+    return "Loaded from internal storage";
+}
 
 static const unsigned palette[][3] = {
     {0x2d, 0x8c, 0xff}, {0x2e, 0xcc, 0x71}, {0xf1, 0xc4, 0x0f}, {0xe7, 0x4c, 0x3c}, {0x9b, 0x59, 0xb6},
@@ -36,12 +46,14 @@ static const unsigned palette[][3] = {
 static void draw(nat_fb *fb, const hello_state *s) {
     uint32_t *px = fb->pixels;
     nat_fill(px, 0, 0, NAT_FB_WIDTH, NAT_FB_HEIGHT, nat_rgb(0x12, 0x14, 0x1a));
-    nat_text_centered(px, 140, 12, nat_rgb(255, 255, 255), "Hello Goggles");
-    nat_text_centered(px, 270, 4, nat_rgb(0xb0, 0xb8, 0xc8), s->message);
+    nat_text_centered(px, 120, 12, nat_rgb(255, 255, 255), "Hello Goggles");
+    nat_text_centered(px, 250, 4, nat_rgb(0xb0, 0xb8, 0xc8), s->message);
+    nat_text_centered(px, 300, 4, nat_rgb(0x2e, 0xcc, 0x71), source_place(s->source));
+    if (s->source) nat_text_centered(px, 345, 2, nat_rgb(0x80, 0x88, 0x98), s->source);
 
     const unsigned *c = palette[s->colour];
     int grid_w = GRID_COLS * (TILE + GAP) - GAP, grid_h = GRID_ROWS * (TILE + GAP) - GAP;
-    int x0 = (NAT_FB_WIDTH - grid_w) / 2, y0 = 380;
+    int x0 = (NAT_FB_WIDTH - grid_w) / 2, y0 = 400;
     for (int r = 0; r < GRID_ROWS; ++r) {
         for (int k = 0; k < GRID_COLS; ++k) {
             int x = x0 + k * (TILE + GAP), y = y0 + r * (TILE + GAP);
@@ -52,7 +64,7 @@ static void draw(nat_fb *fb, const hello_state *s) {
 
     char status[96];
     snprintf(status, sizeof(status), "Launch #%u    Presses: %u", s->launches, s->presses);
-    nat_text_centered(px, y0 + grid_h + 60, 4, nat_rgb(0xe0, 0xe4, 0xec), status);
+    nat_text_centered(px, y0 + grid_h + 40, 4, nat_rgb(0xe0, 0xe4, 0xec), status);
     nat_text_centered(px, 940, 3, nat_rgb(0x80, 0x88, 0x98),
                       "Joystick: move    Press: colour    Back: exit");
     nat_fb_publish(fb);
@@ -142,7 +154,9 @@ int main(int argc, char **argv) {
     fputs("Hello Goggles launched successfully.\n", saved);
     if (fclose(saved)) return 1;
     s.launches = count_lines(path);
-    printf("package=%s\ndata=%s\n", package, data);
+    s.source = getenv("NATARTOS_APP_SOURCE");
+    printf("package=%s\ndata=%s\nsource=%s\n%s\n", package, data, s.source ? s.source : "(unknown)",
+           source_place(s.source));
     for (int i=1; i<argc; ++i) printf("arg[%d]=%s\n", i, argv[i]);
     fflush(stdout);
     int rc = 0;
