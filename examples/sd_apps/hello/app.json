@@ -1,0 +1,8 @@
+{
+  "schema": 1,
+  "id": "hello",
+  "name": "Hello Goggles",
+  "version": "0.1.0",
+  "entry": "bin/hello",
+  "args": []
+}
