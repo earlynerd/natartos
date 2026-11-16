@@ -100,8 +100,10 @@ ANSI), and stops itself after 5 seconds.
 verification. `run` stages and executes the opened internal executable with
 the package as its working directory. It passes argv directly without a shell.
 The child's environment contains only `PATH`, `LANG`, `NATARTOS_APP_ID`,
-`NATARTOS_APP_PACKAGE`, and `NATARTOS_APP_DATA` (plus the display variables
-below); preload hooks are not inherited. Standard input is `/dev/null`,
+`NATARTOS_APP_PACKAGE` (the verified internal copy it runs from),
+`NATARTOS_APP_SOURCE` (the package folder it was staged from, e.g. on the SD
+card), and `NATARTOS_APP_DATA` (plus the display variables below); preload
+hooks are not inherited. Standard input is `/dev/null`,
 stdout/stderr go to the bounded log, and every other inherited descriptor is
 closed, since the menu starts the runner from inside `dji_glasses`.
 

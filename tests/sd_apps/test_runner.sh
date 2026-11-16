@@ -67,6 +67,9 @@ expect 0 'reuse identical cache' run stage hello
 expect 0 'run and save data' run run hello
 grep -q 'Hello Goggles completed.' "$T/cache/logs/last-run.log"
 grep -q "came from the app's package" "$T/cache/logs/last-run.log"
+# The app is told which folder it was staged from (it runs from the cache copy).
+grep -qx "source=$(cd "$T/apps/hello" && pwd -P)" "$T/cache/logs/last-run.log"
+grep -qx 'Loaded from internal storage' "$T/cache/logs/last-run.log"
 [ -f "$T/data/hello/launches.txt" ]
 expect 0 'clear inherited preload and library paths' env LD_PRELOAD=/no-such-library LD_LIBRARY_PATH=/no-such-path \
     "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" run hello
