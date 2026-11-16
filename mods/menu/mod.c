@@ -119,12 +119,8 @@ static void sort_slots(void) {
 
 int natartos_menu_register(const natartos_menu_entry *entry) {
     if (!entry || !entry->id || !entry->name) return -1;
-    if (g_slot_count >= NATARTOS_MAX_MENU_ITEMS) {
-        NTLOG("menu_register: full");
-        return -2;
-    }
 
-    /* Update existing entry with same id */
+    /* Update existing entry with same id (allowed even when every slot is used) */
     for (int i = 0; i < g_slot_count; i++) {
         if (natartos_strncmp(g_slots[i].id, entry->id, MAX_STR) == 0) {
             str_copy(g_slots[i].name, entry->name, MAX_STR);
@@ -138,6 +134,12 @@ int natartos_menu_register(const natartos_menu_entry *entry) {
             NTLOG(entry->id);
             return 0;
         }
+    }
+
+    if (g_slot_count >= NATARTOS_MAX_MENU_ITEMS) {
+        NTLOG("menu_register: full");
+        NTLOG(entry->id);
+        return -2;
     }
 
     menu_slot *s = &g_slots[g_slot_count];
@@ -263,12 +265,18 @@ static void *build_icon(const char *file, int w, int h,
 
 /* ── Action dispatch ── */
 
+/* Runs on the UI thread: commands must background themselves (`... &`).
+ * `on_action` is the documented alternative when no command is given. */
 static void menu_action_handler(void *obj) {
     menu_slot *s = (menu_slot *)obj;
-    if (!s || !s->command[0]) return;
+    if (!s) return;
     NTLOG("action:");
     NTLOG(s->id);
-    if (g_system) g_system(s->command);
+    if (s->command[0]) {
+        if (g_system) g_system(s->command);
+    } else if (s->on_action) {
+        s->on_action();
+    }
 }
 
 /* ── Inject registered items into menu ── */
