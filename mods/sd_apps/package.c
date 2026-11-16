@@ -25,6 +25,14 @@ static int take(parser *p, int c) {
     return 1;
 }
 
+static int word(parser *p, const char *literal) {
+    size_t n = strlen(literal);
+    space(p);
+    if ((size_t)(p->end - p->p) < n || memcmp(p->p, literal, n)) return 0;
+    p->p += n;
+    return 1;
+}
+
 static int hex4(parser *p, unsigned *v) {
     *v = 0;
     for (int i = 0; i < 4; ++i) {
@@ -160,11 +168,15 @@ int app_manifest_parse(const char *text, size_t length, app_manifest *out,
         else if (!strcmp(key, "version")) field = 3;
         else if (!strcmp(key, "entry")) field = 4;
         else if (!strcmp(key, "args")) field = 5;
+        else if (!strcmp(key, "display")) field = 6;
         else { why = "unknown manifest field"; goto bad; }
         if (seen & (1u << field)) { why = "duplicate manifest field"; goto bad; }
         seen |= 1u << field;
         if (field == 0) {
             if (!take(&p, '1')) { why = "unsupported schema"; goto bad; }
+        } else if (field == 6) {
+            if (word(&p, "true")) out->display = 1;
+            else if (!word(&p, "false")) { why = "display must be true or false"; goto bad; }
         } else if (field == 5) {
             if (!take(&p, '[')) goto bad;
             if (!take(&p, ']')) {

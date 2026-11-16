@@ -2,7 +2,8 @@
   "schema": 1,
   "id": "hello",
   "name": "Hello Goggles",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "entry": "bin/hello",
-  "args": []
+  "args": [],
+  "display": true
 }

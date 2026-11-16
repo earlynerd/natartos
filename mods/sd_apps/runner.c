@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "package.h"
 #include "sha256.h"
+#include "natartos_app.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -18,6 +19,7 @@
 #include <sys/prctl.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -29,6 +31,10 @@
 #define LOG_BYTES (1024 * 1024)
 #define CACHE_DEFAULT "/data/local/tmp/natartos-apps"
 #define DATA_DEFAULT "/data/natartos/appdata"
+/* The overlay's flag/frame files (hook_overlay.so, deploy/inject.sh) live here. */
+#define DISPLAY_DEFAULT "/data/local/tmp"
+#define MENU_LIST_SECONDS 5
+#define MENU_LIST_MAX 128
 
 static char error[512];
 static volatile sig_atomic_t interrupted;
@@ -40,13 +46,17 @@ static int fail(const char *format, ...) {
     return -1;
 }
 static int syserror(const char *what) { return fail("%s: %s", what, strerror(errno)); }
+/* O_NOFOLLOW reports a link as ELOOP; name other failures (e.g. EACCES) as they are. */
+static int open_error(const char *what) {
+    return errno == ELOOP ? fail("%s: links are not allowed", what) : syserror(what);
+}
 static void on_signal(int sig) { interrupted = sig; }
 
 static int directory_access(int parent, const char *name, int create, int access) {
     if (create && mkdirat(parent, name, 0700) && errno != EEXIST)
         return syserror("create directory");
     int fd = openat(parent, name, access | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
-    if (fd < 0) return syserror("open directory (links are not allowed)");
+    if (fd < 0) return open_error("open directory");
     return fd;
 }
 static int directory(int parent, const char *name, int create) {
@@ -91,7 +101,7 @@ static int overlap(const char *a, const char *b) {
 
 static int regular(int parent, const char *name, int flags, unsigned mode) {
     int fd = openat(parent, name, flags | O_NOFOLLOW | O_CLOEXEC | O_NONBLOCK, mode);
-    if (fd < 0) return syserror("open file (links are not allowed)");
+    if (fd < 0) return open_error("open file");
     struct stat st;
     if (fstat(fd, &st) || !S_ISREG(st.st_mode) || st.st_nlink != 1) {
         close(fd); return fail("only regular files with one link are allowed");
@@ -409,7 +419,105 @@ static int64_t milliseconds(void) {
     return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
 }
 
-static int run_app(int package_fd, const char *package, const char *data, app_manifest *m, int logs, unsigned timeout) {
+/*
+ * Display hand-off for apps whose manifest sets "display": true. This follows
+ * the same protocol as the Doom and PC Stream launchers: while fb_override
+ * exists, hook_overlay.so shows frames from fb_shared instead of the DJI UI;
+ * removing the flag makes the overlay stop and repaint the DJI UI. The overlay
+ * (or Toolya) asks for a stop by creating fb_stop, and its cleanup removes
+ * fb_override itself.
+ */
+typedef struct {
+    char override[PATH_MAX], stop[PATH_MAX], frame[PATH_MAX];
+    const char *inputs;
+    int claimed;
+    int lost;   /* fb_override disappeared: the overlay already cleaned up */
+} display_ctx;
+
+static int present(const char *path) {
+    struct stat st;
+    return !fstatat(AT_FDCWD, path, &st, AT_SYMLINK_NOFOLLOW) || errno != ENOENT;
+}
+
+static int display_claim(display_ctx *d, const char *dir, const char *inputs) {
+    memset(d, 0, sizeof(*d));
+    d->inputs = inputs;
+    if (snprintf(d->override, sizeof(d->override), "%s/fb_override", dir) >= (int)sizeof(d->override) ||
+        snprintf(d->stop, sizeof(d->stop), "%s/fb_stop", dir) >= (int)sizeof(d->stop) ||
+        snprintf(d->frame, sizeof(d->frame), "%s/fb_shared", dir) >= (int)sizeof(d->frame))
+        return fail("display directory path too long");
+    if (present(d->override)) return fail("another display app is active (fb_override exists)");
+    /* A stale stop request would end this app as soon as the overlay attaches. */
+    if (unlink(d->stop) && errno != ENOENT) return syserror("remove stale fb_stop");
+    if (unlink(d->frame) && errno != ENOENT) return syserror("remove stale fb_shared");
+    /* Frame file first: the overlay opens it as soon as it sees the flag. */
+    int fd = open(d->frame, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) return syserror("create fb_shared");
+    /* Readable by the overlay whatever dji_glasses' uid; umask is 077 here. */
+    if (fchmod(fd, 0644) || ftruncate(fd, (off_t)NAT_FB_FILE_BYTES)) {
+        syserror("size fb_shared");
+        close(fd); unlink(d->frame);
+        return -1;
+    }
+    close(fd);
+    fd = open(d->override, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
+    if (fd < 0) {
+        int saved = errno;
+        unlink(d->frame);
+        errno = saved;
+        return syserror("claim display (fb_override)");
+    }
+    fchmod(fd, 0644);
+    close(fd);
+    d->claimed = 1;
+    return 0;
+}
+
+/* Nonzero once the overlay or Toolya has asked the display app to stop. */
+static int display_stop_requested(display_ctx *d) {
+    if (!present(d->override)) { d->lost = 1; return 1; }
+    return present(d->stop);
+}
+
+/* Give the screen back. Call only after the app's process group is gone, so
+ * its input grab is released before the overlay injects the repaint key. */
+static void display_release(display_ctx *d) {
+    if (!d->claimed) return;
+    if (!d->lost) unlink(d->override);
+    unlink(d->stop);
+    unlink(d->frame);
+    d->claimed = 0;
+}
+
+/* Close every descriptor from 3 up except `keep`. The runner may be started
+ * from dji_glasses (menu entry), whose open files must not leak into apps. */
+static void close_inherited(int keep) {
+#ifdef SYS_close_range
+    if ((keep <= 3 || !syscall(SYS_close_range, 3u, (unsigned)keep - 1, 0u)) &&
+        !syscall(SYS_close_range, (unsigned)(keep < 3 ? 3 : keep + 1), ~0u, 0u)) return;
+#endif
+    DIR *d = opendir("/proc/self/fd");
+    if (d) {
+        struct dirent *e;
+        while ((e = readdir(d))) {
+            char *end;
+            long fd = strtol(e->d_name, &end, 10);
+            if (*end || fd < 3 || fd == keep || fd == dirfd(d)) continue;
+            close((int)fd);
+        }
+        closedir(d);
+        return;
+    }
+    long max = sysconf(_SC_OPEN_MAX);
+    if (max < 0 || max > 65536) max = 65536;
+    for (long fd = 3; fd < max; ++fd) if (fd != keep) close((int)fd);
+}
+
+#define STRINGIFY_(x) #x
+#define STRINGIFY(x) STRINGIFY_(x)
+
+static int run_app(int package_fd, const char *package, const char *data, app_manifest *m, int logs,
+                   unsigned timeout, display_ctx *display) {
     int executable_fd = entry_open(package_fd, m->entry);
     if (executable_fd < 0) return -1;
     int log = regular(logs, "last-run.log", O_WRONLY | O_CREAT, 0600);
@@ -430,21 +538,37 @@ static int run_app(int package_fd, const char *package, const char *data, app_ma
         if (input > STDERR_FILENO) close(input);
         if (pipefd[1] > STDERR_FILENO) close(pipefd[1]);
         char executable[PATH_MAX], package_env[PATH_MAX + 32], data_env[PATH_MAX + 32];
-        char id_env[APP_ID_MAX + 32];
+        char id_env[APP_ID_MAX + 32], fb_env[PATH_MAX + 32], input_env[PATH_MAX + 32];
         if (snprintf(executable, sizeof(executable), "%s/%s", package, m->entry) >= (int)sizeof(executable)) _exit(126);
         snprintf(package_env, sizeof(package_env), "NATARTOS_APP_PACKAGE=%s", package);
         snprintf(data_env, sizeof(data_env), "NATARTOS_APP_DATA=%s", data);
         snprintf(id_env, sizeof(id_env), "NATARTOS_APP_ID=%s", m->id);
+        char *env[10];
+        unsigned envc = 0;
 #ifdef SD_APPS_HOST_TEST
-        char *env[] = {"PATH=/usr/bin:/bin", "LANG=C", package_env, data_env, id_env, NULL};
+        env[envc++] = "PATH=/usr/bin:/bin";
 #else
-        char *env[] = {"PATH=/system/bin:/system/xbin", "LANG=C", package_env, data_env, id_env, NULL};
+        env[envc++] = "PATH=/system/bin:/system/xbin";
 #endif
+        env[envc++] = "LANG=C";
+        env[envc++] = package_env;
+        env[envc++] = data_env;
+        env[envc++] = id_env;
+        if (display) {
+            snprintf(fb_env, sizeof(fb_env), "NATARTOS_FB_PATH=%s", display->frame);
+            snprintf(input_env, sizeof(input_env), "NATARTOS_INPUT_DEVICES=%s", display->inputs);
+            env[envc++] = fb_env;
+            env[envc++] = "NATARTOS_FB_WIDTH=" STRINGIFY(NAT_FB_WIDTH);
+            env[envc++] = "NATARTOS_FB_HEIGHT=" STRINGIFY(NAT_FB_HEIGHT);
+            env[envc++] = input_env;
+        }
+        env[envc] = NULL;
         char *argv[APP_ARGS_MAX + 2];
         argv[0] = executable;
         for (unsigned i=0; i<m->argc; ++i) argv[i+1] = m->args[i];
         argv[m->argc+1] = NULL;
         if (fchdir(package_fd)) { dprintf(2, "fchdir: %s\n", strerror(errno)); _exit(126); }
+        close_inherited(executable_fd);
         /* Execute the opened staged inode, without resolving the absolute path again. */
         fexecve(executable_fd, argv, env);
         dprintf(2, "fexecve: %s\n", strerror(errno));
@@ -462,6 +586,13 @@ static int run_app(int package_fd, const char *package, const char *data, app_ma
         int64_t now = milliseconds();
         if (!stopping && (interrupted || (timeout && now - start >= (int64_t)timeout*1000))) {
             result = interrupted ? 128 + interrupted : 124;
+            kill(-pid, SIGTERM); stopping = 1; kill_at = now + 2000;
+        }
+        /* A stop request (fb_stop from Toolya/SIGUSR1, or the overlay's own
+         * cleanup removing fb_override) ends the app. The overlay injects its
+         * repaint key ~0.45 s later, so the app's input grab must go quickly. */
+        if (!stopping && display && display_stop_requested(display)) {
+            result = 128 + SIGTERM;
             kill(-pid, SIGTERM); stopping = 1; kill_at = now + 2000;
         }
         if (stopping && now >= kill_at) { kill(-pid, SIGKILL); kill_at = INT64_MAX; }
@@ -560,6 +691,76 @@ static int list_apps(int apps) {
     return rc;
 }
 
+/*
+ * Listing for mod_sd_apps.so, which registers one More-menu entry per app
+ * while dji_glasses starts. Lines are "id<TAB>version<TAB>name", sorted by
+ * name. Checks manifests and executables only (no full-package hash), so a
+ * large package cannot hold up dji_glasses start-up; launch re-verifies.
+ */
+typedef struct {
+    char id[APP_ID_MAX + 1], version[65], name[APP_TEXT_MAX + 1];
+} menu_item;
+
+/* The menu builds labels with EwNewStringAnsi: keep printable ASCII. */
+static void ascii_label(char *out, size_t size, const char *in) {
+    size_t n = 0;
+    for (const unsigned char *s = (const unsigned char *)in; *s && n + 1 < size; ++s) {
+        if ((*s & 0xc0) == 0x80) continue;
+        out[n++] = (*s >= 32 && *s < 127) ? (char)*s : '?';
+    }
+    out[n] = 0;
+}
+
+static int fold(int c) { return c >= 'A' && c <= 'Z' ? c - 'A' + 'a' : c; }
+static int compare_item(const void *a, const void *b) {
+    const menu_item *x = a, *y = b;
+    for (const char *p = x->name, *q = y->name;; ++p, ++q) {
+        int d = fold((unsigned char)*p) - fold((unsigned char)*q);
+        if (d) return d;
+        if (!*p) break;
+    }
+    return strcmp(x->id, y->id);
+}
+
+static int menu_list(int apps) {
+    DIR *d = listing(apps);
+    if (!d) return -1;
+    menu_item *items = calloc(MENU_LIST_MAX, sizeof(*items));
+    if (!items) { closedir(d); return fail("out of memory"); }
+    unsigned count = 0;
+    int rc = 0;
+    struct dirent *e;
+    errno = 0;
+    while ((e = readdir(d))) {
+        if (!app_id_valid(e->d_name)) continue;
+        if (count == MENU_LIST_MAX) {
+            fprintf(stderr, "menu-list: more than %d apps; the rest are not listed\n", MENU_LIST_MAX);
+            break;
+        }
+        int root = directory(apps, e->d_name, 0);
+        app_manifest m;
+        if (root < 0 || load_manifest(root, e->d_name, &m)) {
+            fprintf(stderr, "skip %s: %s\n", e->d_name, error);
+        } else {
+            menu_item *item = &items[count++];
+            snprintf(item->id, sizeof(item->id), "%s", m.id);
+            snprintf(item->version, sizeof(item->version), "%s", m.version);
+            ascii_label(item->name, sizeof(item->name), m.name);
+        }
+        if (root >= 0) close(root);
+        errno = 0;
+    }
+    if (!e && errno) rc = syserror("enumerate apps");
+    closedir(d);
+    if (!rc) {
+        qsort(items, count, sizeof(*items), compare_item);
+        for (unsigned i = 0; i < count; ++i)
+            printf("%s\t%s\t%s\n", items[i].id, items[i].version, items[i].name);
+    }
+    free(items);
+    return rc;
+}
+
 static int discover(char result[PATH_MAX]) {
     FILE *mounts = setmntent("/proc/mounts", "r");
     if (!mounts) return syserror("read mount table");
@@ -580,15 +781,29 @@ static int discover(char result[PATH_MAX]) {
 
 static void usage(void) {
     puts("sd_app_runner [--apps ABS] [--cache ABS] [--data ABS] [--timeout SECONDS]\n"
-         "              list | validate ID | stage ID | run ID | clean ID\n"
-         "Defaults: external SD/natartos/apps; cache " CACHE_DEFAULT "; data " DATA_DEFAULT "\n"
+         "              [--display-dir ABS] [--input ABS]...\n"
+         "              list | menu-list | validate ID | stage ID | run ID | clean ID\n"
+         "Defaults: external SD/natartos/apps; cache " CACHE_DEFAULT "; data " DATA_DEFAULT ";\n"
+         "display flags in " DISPLAY_DEFAULT "; input " NAT_INPUT_DEFAULT ".\n"
          "Static ARM64 apps only. Host-test builds accept their build architecture.\n"
          "Exit: app status, 124 timeout, 125 runner error, 128+signal cancellation.");
 }
 
+/* Started from dji_glasses' system(), stdio may be closed; keep 0-2 occupied
+ * so no runner file or pipe ends up as an app's stdin/stdout/stderr. */
+static void ensure_stdio(void) {
+    int fd;
+    while ((fd = open("/dev/null", O_RDWR | O_CLOEXEC)) >= 0 && fd <= STDERR_FILENO)
+        fcntl(fd, F_SETFD, 0);
+    if (fd > STDERR_FILENO) close(fd);
+}
+
 int main(int argc, char **argv) {
+    ensure_stdio();
     const char *apps_path = NULL, *cache_path = CACHE_DEFAULT, *data_path = DATA_DEFAULT;
-    unsigned timeout = 0;
+    const char *display_dir = DISPLAY_DEFAULT;
+    char inputs[NAT_INPUT_MAX * 256] = "";
+    unsigned timeout = 0, input_count = 0;
     int i = 1;
     for (; i < argc && !strncmp(argv[i], "--", 2); i += 2) {
         if (!strcmp(argv[i], "--help")) { usage(); return 0; }
@@ -596,7 +811,18 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[i], "--apps")) apps_path = argv[i+1];
         else if (!strcmp(argv[i], "--cache")) cache_path = argv[i+1];
         else if (!strcmp(argv[i], "--data")) data_path = argv[i+1];
-        else if (!strcmp(argv[i], "--timeout")) {
+        else if (!strcmp(argv[i], "--display-dir")) {
+            if (*argv[i+1] != '/' || strlen(argv[i+1]) >= PATH_MAX - 16) { usage(); return 125; }
+            display_dir = argv[i+1];
+        } else if (!strcmp(argv[i], "--input")) {
+            /* Passed to display apps as a colon-separated list. */
+            const char *path = argv[i+1];
+            if (*path != '/' || strchr(path, ':') || strlen(path) >= 255 || input_count == NAT_INPUT_MAX) {
+                usage(); return 125;
+            }
+            if (input_count++) strcat(inputs, ":");
+            strcat(inputs, path);
+        } else if (!strcmp(argv[i], "--timeout")) {
             char *end;
             errno = 0;
             unsigned long n = strtoul(argv[i+1], &end, 10);
@@ -604,13 +830,17 @@ int main(int argc, char **argv) {
             timeout = (unsigned)n;
         } else { usage(); return 125; }
     }
+    if (!input_count) strcpy(inputs, NAT_INPUT_DEFAULT);
     if (i >= argc) { usage(); return 125; }
     const char *action = argv[i++], *id = i < argc ? argv[i++] : NULL;
-    if (i != argc || (strcmp(action, "list") && strcmp(action, "validate") &&
+    int listing_action = !strcmp(action, "list") || !strcmp(action, "menu-list");
+    if (i != argc || (!listing_action && strcmp(action, "validate") &&
         strcmp(action, "stage") && strcmp(action, "run") && strcmp(action, "clean")) ||
-        (!strcmp(action, "list") ? id != NULL : !id || !app_id_valid(id))) {
+        (listing_action ? id != NULL : !id || !app_id_valid(id))) {
         usage(); return 125;
     }
+    /* menu-list runs inside dji_glasses start-up; never let a slow card stall it. */
+    if (!strcmp(action, "menu-list")) alarm(MENU_LIST_SECONDS);
     umask(0077);
     struct sigaction sa = {0};
     signal(SIGCHLD, SIG_DFL);
@@ -628,6 +858,7 @@ int main(int argc, char **argv) {
         apps = root_directory(apps_path, 0, apps_abs);
         if (apps < 0) goto done;
         if (!strcmp(action, "list")) { rc = list_apps(apps); goto done; }
+        if (!strcmp(action, "menu-list")) { rc = menu_list(apps); goto done; }
         source = directory(apps, id, 0);
         if (source < 0) goto done;
         if (!strcmp(action, "validate")) {
@@ -673,8 +904,12 @@ int main(int argc, char **argv) {
     if (logs < 0) goto done;
     staged = directory(app, digest, 0);
     if (staged < 0) goto done;
+    display_ctx display = {0};
+    /* Claim the screen only once the verified copy is ready to execute. */
+    if (manifest.display && display_claim(&display, display_dir, inputs)) goto done;
     fflush(stdout);
-    rc = run_app(staged, package, save, &manifest, logs, timeout);
+    rc = run_app(staged, package, save, &manifest, logs, timeout, manifest.display ? &display : NULL);
+    display_release(&display);
 done:
     if (rc < 0) fprintf(stderr, "sd_app_runner: %s\n", *error ? error : "operation failed");
     int fds[] = {staged, logs, data, app, packages, lock, cache, source, apps};

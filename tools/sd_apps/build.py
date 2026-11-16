@@ -42,9 +42,17 @@ def main():
         subprocess.run(cc + ["-O2", "-std=c11", "-Wall", "-Wextra", "-Werror", "-static", "-no-pie", "-s"]
                        + list(extra) + [str(ROOT / s) for s in sources] + ["-o", str(dest)], check=True, env=env)
 
+    def build_mod(name, source):
+        # Same flags as the CI mod loop: self-contained, loaded into dji_glasses.
+        subprocess.run(cc + ["-shared", "-fPIC", "-O2", "-fno-builtin", "-nostdlib",
+                            "-I", str(ROOT / "include"), "-I", str(ROOT / "mods"), f"-Wl,-soname,{name}",
+                            str(ROOT / source), "-o", str(out / name)], check=True, env=env)
+
+    include = ["-I", str(ROOT / "include")]
     flags = ["-DSD_APPS_HOST_TEST"] if args.host_test else []
-    build(out / "sd_app_runner", ["mods/sd_apps/runner.c", "mods/sd_apps/package.c", "mods/sd_apps/sha256.c"], flags)
-    build(out / "apps/hello/bin/hello", ["examples/sd_apps/hello/hello.c"])
+    build(out / "sd_app_runner", ["mods/sd_apps/runner.c", "mods/sd_apps/package.c", "mods/sd_apps/sha256.c"],
+          flags + include)
+    build(out / "apps/hello/bin/hello", ["examples/sd_apps/hello/hello.c"], include)
     shutil.copyfile(ROOT / "examples/sd_apps/hello/app.json", out / "apps/hello/app.json")
     (out / "apps/hello/assets").mkdir(exist_ok=True)
     shutil.copyfile(ROOT / "examples/sd_apps/hello/assets/message.txt", out / "apps/hello/assets/message.txt")
@@ -52,16 +60,14 @@ def main():
         build(out / "fixture", ["tests/sd_apps/fixture.c"])
         build(out / "hash_check", ["tests/sd_apps/hash_check.c", "mods/sd_apps/sha256.c"])
     if args.framework:
-        for name, source in [("natartos_loader.so", "src/natartos_loader.c"),
-                             ("mod_template.so", "mods/template/mod.c")]:
-            subprocess.run(cc + ["-shared", "-fPIC", "-O2", "-fno-builtin", "-nostdlib",
-                                "-I", str(ROOT / "include"), f"-Wl,-soname,{name}",
-                                str(ROOT / source), "-o", str(out / name)], check=True, env=env)
+        build_mod("natartos_loader.so", "src/natartos_loader.c")
+        build_mod("mod_template.so", "mods/template/mod.c")
     sources = list((ROOT / "mods/sd_apps").glob("*.[ch]"))
-    sources += [ROOT / "examples/sd_apps/hello/hello.c"]
+    sources += [ROOT / "examples/sd_apps/hello/hello.c", ROOT / "examples/sd_apps/hello/app.json",
+                ROOT / "include/natartos_app.h", ROOT / "include/natartos_common.h"]
     artifacts = [out / "sd_app_runner", out / "apps/hello/bin/hello"]
     if args.framework:
-        sources += [ROOT / "src/natartos_loader.c", ROOT / "mods/template/mod.c", ROOT / "include/natartos_common.h"]
+        sources += [ROOT / "src/natartos_loader.c", ROOT / "mods/template/mod.c"]
         artifacts += [out / "natartos_loader.so", out / "mod_template.so"]
     info = {
         "upstream_base": BASE_REVISION, "compiler": compiler,

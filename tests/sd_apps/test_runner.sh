@@ -20,15 +20,29 @@ expect() {
     echo "PASS: $label"
 }
 run() { "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" "$@"; }
+wait_until() {
+    n=0
+    while ! "$@" 2>/dev/null; do
+        n=$((n+1)); [ "$n" -lt 100 ] || { echo "FAIL: timed out waiting for: $*"; exit 1; }
+        sleep 0.1
+    done
+}
+# Console form of the example (no "display"): these tests run without an overlay.
 manifest() {
     cat >"$T/apps/hello/app.json" <<EOF
 {"schema":1,"id":"hello","name":"Hello Goggles","version":"0.1.0","entry":"bin/hello","args":$1}
 EOF
 }
+display_manifest() {
+    cat >"$T/apps/hello/app.json" <<EOF
+{"schema":1,"id":"hello","name":"Hello Goggles","version":"0.1.0","entry":"bin/hello","args":$1,"display":true}
+EOF
+}
 restore() {
-    cp "$B/apps/hello/app.json" "$T/apps/hello/app.json"
+    manifest '[]'
     cp "$B/apps/hello/bin/hello" "$T/apps/hello/bin/hello"
 }
+restore
 
 expect 0 'SHA-256 known vectors' "$B/hash_check"
 expect 0 'valid static executable' run validate hello
@@ -158,6 +172,101 @@ expect 143 'runner cancellation exits after terminating app' wait "$leader"
 restore
 expect 0 'launch still works after crash and cancellation' run run hello
 expect 0 'repeat launch' run run hello
+
+# ---- Menu listing (read by mod_sd_apps.so while dji_glasses starts) ----
+expect 0 'menu listing' run menu-list
+[ "$(cat "$T/out")" = "$(printf 'hello\t0.1.0\tHello Goggles')" ]
+cat >"$T/apps/hello/app.json" <<'EOF'
+{"schema":1,"id":"hello","name":"Café 🥽","version":"1.0","entry":"bin/hello"}
+EOF
+expect 0 'menu labels reduced to ASCII' run menu-list
+[ "$(cat "$T/out")" = "$(printf 'hello\t1.0\tCaf? ?')" ]
+mkdir -p "$T/apps/broken"
+echo '{' >"$T/apps/broken/app.json"
+expect 0 'invalid package left out of menu listing' run menu-list
+if grep -q broken "$T/out"; then echo "FAIL: broken package listed"; exit 1; fi
+grep -q 'skip broken' "$T/err"
+rm -r "$T/apps/broken"
+restore
+
+# ---- Descriptors: a runner started from dji_glasses must not leak its files ----
+cp "$B/fixture" "$T/apps/hello/bin/hello"
+manifest '["fds"]'
+exec 8</dev/null
+expect 0 'inherited descriptors closed before launch' run run hello
+exec 8<&-
+restore
+
+# ---- Display apps: overlay hand-off (fb_override / fb_shared / fb_stop) ----
+D="$T/display"
+mkdir -p "$D"
+mkfifo "$T/keys"
+exec 7<>"$T/keys"   # keeps the FIFO open, so apps never see end-of-input
+# --timeout turns a regression (app never stopped) into exit 124 instead of a hang.
+drun() { "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" --display-dir "$D" --input "$T/keys" --timeout 20 "$@"; }
+key() { "$B/fixture" key "$1" "$2" >&7; }
+drawn() { c=$(od -An -tu4 -N4 "$D/fb_shared" | tr -d ' '); [ -n "$c" ] && [ "$c" -gt 0 ]; }
+released() { [ ! -e "$D/fb_override" ] && [ ! -e "$D/fb_shared" ] && [ ! -e "$D/fb_stop" ]; }
+
+cp "$B/apps/hello/app.json" "$T/apps/hello/app.json"
+expect 0 'example manifest is a display app' run validate hello
+grep -q '"display": true' "$T/apps/hello/app.json"
+cat >"$T/apps/hello/app.json" <<'EOF'
+{"schema":1,"id":"hello","name":"Hello Goggles","version":"0.1.0","entry":"bin/hello","display":"yes"}
+EOF
+expect 125 'display flag must be boolean' run validate hello
+display_manifest '[]'
+before=$(wc -l <"$T/data/hello/launches.txt")
+drun run hello >"$T/display.out" 2>"$T/display.err" &
+app=$!
+wait_until test -f "$D/fb_override"
+wait_until drawn
+[ "$(wc -c <"$D/fb_shared")" -eq 16588864 ]
+[ "$(wc -l <"$T/data/hello/launches.txt")" -eq $((before + 1)) ]
+key 28 1; key 28 0       # 5D press: colour change, redraw
+key 158 1; key 158 0     # BACK: Hello exits on release
+expect 0 'display app exits on BACK and returns the screen' wait "$app"
+released
+grep -q 'presses=1' "$T/cache/logs/last-run.log"
+
+touch "$D/fb_override"
+expect 125 'display app refused while another app owns the screen' drun run hello
+[ -f "$D/fb_override" ]
+[ ! -e "$D/fb_shared" ]
+rm "$D/fb_override"
+
+drun run hello >"$T/display.out" 2>"$T/display.err" &
+app=$!
+wait_until drawn
+touch "$D/fb_stop"
+expect 143 'overlay stop request ends display app' wait "$app"
+released
+
+drun run hello >"$T/display.out" 2>"$T/display.err" &
+app=$!
+wait_until drawn
+rm -f "$D/fb_override" "$D/fb_shared"   # what the overlay's cleanup does
+expect 143 'overlay cleanup ends display app' wait "$app"
+released
+
+cp "$B/fixture" "$T/apps/hello/bin/hello"
+display_manifest '["ignoreterm"]'
+rm -f "$T/data/hello/self.pid"
+drun run hello >"$T/display.out" 2>"$T/display.err" &
+app=$!
+wait_until test -f "$T/data/hello/self.pid"
+wait_until test -f "$D/fb_override"
+touch "$D/fb_stop"
+expect 143 'unresponsive display app killed after stop request' wait "$app"
+released
+pid=$(cat "$T/data/hello/self.pid")
+if [ -e "/proc/$pid/stat" ]; then grep -q ' Z ' "/proc/$pid/stat"; fi
+display_manifest '["crash"]'
+expect 139 'crashed display app returns the screen' drun run hello
+released
+exec 7<&-
+restore
+
 expect 0 'final cleanup' run clean hello
 [ -f "$T/data/hello/launches.txt" ]
 echo "SD_APPS_TESTS_PASSED=$passed"
