@@ -66,7 +66,7 @@ expect 0 'reuse identical cache' run stage hello
 [ "$staged" = "$(cat "$T/out")" ]
 expect 0 'run and save data' run run hello
 grep -q 'Hello Goggles completed.' "$T/cache/logs/last-run.log"
-grep -q 'SD package' "$T/cache/logs/last-run.log"
+grep -q "came from the app's package" "$T/cache/logs/last-run.log"
 [ -f "$T/data/hello/launches.txt" ]
 expect 0 'clear inherited preload and library paths' env LD_PRELOAD=/no-such-library LD_LIBRARY_PATH=/no-such-path \
     "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" run hello
