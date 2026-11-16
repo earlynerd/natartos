@@ -17,6 +17,7 @@ typedef struct {
     char entry[APP_PATH_MAX];
     char args[APP_ARGS_MAX][APP_ARG_MAX];
     unsigned argc;
+    int display;  /* draws through the natartos overlay (optional, default false) */
 } app_manifest;
 
 int app_id_valid(const char *id);

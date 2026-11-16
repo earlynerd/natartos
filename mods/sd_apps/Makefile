@@ -1,17 +1,18 @@
 CC = aarch64-linux-gnu-gcc
 CFLAGS ?= -O2 -std=c11 -Wall -Wextra -Werror
 LDFLAGS ?= -static -no-pie
+INCLUDE = -I../../include
 OUT ?= ../../build/sd_apps
 
 all: $(OUT)/sd_app_runner $(OUT)/hello/bin/hello
 
-$(OUT)/sd_app_runner: runner.c package.c package.h sha256.c sha256.h
+$(OUT)/sd_app_runner: runner.c package.c package.h sha256.c sha256.h ../../include/natartos_app.h
 	mkdir -p $(OUT)
-	$(CC) $(CFLAGS) $(LDFLAGS) runner.c package.c sha256.c -o $@
+	$(CC) $(CFLAGS) $(INCLUDE) $(LDFLAGS) runner.c package.c sha256.c -o $@
 
-$(OUT)/hello/bin/hello: ../../examples/sd_apps/hello/hello.c ../../examples/sd_apps/hello/app.json ../../examples/sd_apps/hello/assets/message.txt
+$(OUT)/hello/bin/hello: ../../examples/sd_apps/hello/hello.c ../../examples/sd_apps/hello/app.json ../../examples/sd_apps/hello/assets/message.txt ../../include/natartos_app.h
 	mkdir -p $(OUT)/hello/bin $(OUT)/hello/assets
-	$(CC) $(CFLAGS) $(LDFLAGS) ../../examples/sd_apps/hello/hello.c -o $@
+	$(CC) $(CFLAGS) $(INCLUDE) $(LDFLAGS) ../../examples/sd_apps/hello/hello.c -o $@
 	cp ../../examples/sd_apps/hello/app.json $(OUT)/hello/
 	cp ../../examples/sd_apps/hello/assets/message.txt $(OUT)/hello/assets/
 

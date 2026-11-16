@@ -1,4 +1,6 @@
 #define _POSIX_C_SOURCE 200809L
+#include <dirent.h>
+#include <linux/input.h>
 #include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -12,6 +14,31 @@ int main(int argc, char **argv) {
         execv(argv[2], argv + 2);
         perror("execute test runner without privileges");
         return 1;
+    }
+    if (argc == 4 && !strcmp(argv[1], "key")) {
+        /* One evdev key event plus SYN, as a button device would report it. */
+        struct input_event ev[2];
+        memset(ev, 0, sizeof(ev));
+        ev[0].type = EV_KEY;
+        ev[0].code = (unsigned short)atoi(argv[2]);
+        ev[0].value = atoi(argv[3]);
+        return write(STDOUT_FILENO, ev, sizeof(ev)) == (ssize_t)sizeof(ev) ? 0 : 1;
+    }
+    if (!strcmp(argv[1], "fds")) {
+        /* Only stdin/stdout/stderr may reach an app. */
+        DIR *d = opendir("/proc/self/fd");
+        if (!d) return 1;
+        struct dirent *e;
+        int leaked = 0;
+        while ((e = readdir(d))) {
+            int fd = atoi(e->d_name);
+            if (e->d_name[0] != '.' && fd > 2 && fd != dirfd(d)) {
+                fprintf(stderr, "inherited fd %d\n", fd);
+                leaked = 1;
+            }
+        }
+        closedir(d);
+        return leaked ? 9 : 0;
     }
     char ownpath[4096];
     snprintf(ownpath, sizeof(ownpath), "%s/self.pid", getenv("NATARTOS_APP_DATA"));
