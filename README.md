@@ -123,6 +123,10 @@ cd src && make                   # builds natartos_loader.so
 
 ## Documentation
 
+- [SD app runner](docs/SD_APP_RUNNER.md) — build, test, and bench commands for
+  the first SD launcher implementation (console sample; picker still planned).
+- [SD card application launcher plan](docs/SD_APP_LAUNCHER_PLAN.md) — scope,
+  package format, milestones, and validation for this fork's planned launcher.
 - [MOD_SPEC.md](MOD_SPEC.md) — mod descriptor and how to write a mod
 - [mods/template](mods/template) — starter template for your own mod
 - [mods/menu/RE_MENU.md](mods/menu/RE_MENU.md) — menu injection reverse-engineering notes
