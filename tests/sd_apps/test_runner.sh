@@ -309,6 +309,11 @@ released
 exec 7<&-
 restore
 
+# ---- Other natartos mods with host-testable logic ----
+mkdir -p "$T/mute"
+expect 0 'mute mod writes silence and toggles from the menu' sh -c 'cd "$1" && "$2"' sh "$T/mute" "$B/mute_check"
+grep -q MUTE_CHECK_OK "$T/out"
+
 expect 0 'final cleanup' run clean hello
 [ -f "$T/data/hello/launches.txt" ]
 echo "SD_APPS_TESTS_PASSED=$passed"

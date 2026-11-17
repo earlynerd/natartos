@@ -61,9 +61,11 @@ def main():
         build(out / "hash_check", ["tests/sd_apps/hash_check.c", "mods/sd_apps/sha256.c"])
         # The SD Apps mod's logic, against a libc stand-in for natartos_common.h.
         build(out / "mod_check", ["tests/sd_apps/mod_check.c"], ["-I", str(ROOT / "tests/sd_apps/shim")])
+        build(out / "mute_check", ["tests/sd_apps/mute_check.c"], ["-I", str(ROOT / "tests/sd_apps/shim")])
     else:
         build_mod("mod_sd_apps.so", "mods/sd_apps/mod.c")
         build_mod("hook_menu.so", "mods/menu/mod.c")
+        build_mod("mod_mute.so", "mods/mute/mod.c")
     if args.framework:
         build_mod("natartos_loader.so", "src/natartos_loader.c")
         build_mod("mod_template.so", "mods/template/mod.c")
@@ -72,8 +74,8 @@ def main():
                 ROOT / "include/natartos_app.h", ROOT / "include/natartos_common.h"]
     artifacts = [out / "sd_app_runner", out / "apps/hello/bin/hello"]
     if not args.host_test:
-        sources += [ROOT / "mods/menu/mod.c"]
-        artifacts += [out / "mod_sd_apps.so", out / "hook_menu.so"]
+        sources += [ROOT / "mods/menu/mod.c", ROOT / "mods/mute/mod.c"]
+        artifacts += [out / "mod_sd_apps.so", out / "hook_menu.so", out / "mod_mute.so"]
     if args.framework:
         sources += [ROOT / "src/natartos_loader.c", ROOT / "mods/template/mod.c"]
         artifacts += [out / "natartos_loader.so", out / "mod_template.so"]
