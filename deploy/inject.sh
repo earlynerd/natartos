@@ -50,6 +50,8 @@ while true; do
     # session (or the respawn before this one) left behind. A stale fb_stop
     # otherwise makes the new overlay run cleanup→restart on every boot forever.
     rm -f /data/local/tmp/fb_stop /data/local/tmp/fb_override
+    # fb_owner.lock and fb_overlay.lock are persistent lease inodes. Never
+    # unlink them: old and new processes must contend on the same locks.
     PRELOAD=$(build_preload)
     export LD_PRELOAD="$PRELOAD"
     log "start dji_glasses LD_PRELOAD=$PRELOAD"
