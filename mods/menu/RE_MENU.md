@@ -29,7 +29,8 @@ PLT-interpose `MxBindableAbstractMenu_Reload`:
 3. Clone 256-byte template from last stock item
 4. Patch: `d[4]=action, d[5]=icon, d[16]=title, d[17]=subtitle, d[18]=type(31)`
 5. `MxBindableAbstractMenu_AddItemFromData(self, item_data)`
-6. `CoreVerticalList_OnSetNoOfItems(self, 0)` + `vmt[58](self)` (Postreload)
+6. `CoreVerticalList_OnSetNoOfItems(self, 0)` + `MxBindableAbstractMenu__Postreload(self)`
+   (resolved by name).
 
 ## VMT names
 
