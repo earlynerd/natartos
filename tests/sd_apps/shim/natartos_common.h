@@ -24,6 +24,7 @@ static inline long sys_faccessat(int dirfd, const char *path, int mode) { return
 static inline int natartos_strlen(const char *s) { return (int)strlen(s); }
 static inline int natartos_strncmp(const char *a, const char *b, int n) { return strncmp(a, b, (size_t)n); }
 static inline void natartos_memcpy(void *dst, const void *src, long n) { memcpy(dst, src, (size_t)n); }
+static inline int natartos_flag_exists(const char *path) { return access(path, F_OK) == 0; }
 
 #ifdef NTLOG_PREFIX
 #define NTLOG(msg)          fprintf(stderr, "[%s] %s\n", NTLOG_PREFIX, (msg))
