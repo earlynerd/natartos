@@ -7,7 +7,7 @@ OUT ?= ../../build/sd_apps
 
 all: $(OUT)/sd_app_runner $(OUT)/hello/bin/hello $(OUT)/mod_sd_apps.so
 
-$(OUT)/sd_app_runner: runner.c package.c package.h sha256.c sha256.h ../../include/natartos_app.h
+$(OUT)/sd_app_runner: runner.c package.c package.h sha256.c sha256.h ../../include/natartos_app.h ../../include/natartos_display.h
 	mkdir -p $(OUT)
 	$(CC) $(CFLAGS) $(INCLUDE) $(LDFLAGS) runner.c package.c sha256.c -o $@
 

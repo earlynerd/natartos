@@ -8,12 +8,13 @@ they exit. The `mod_sd_apps.so` mod adds one More-menu entry per app on the
 card. The Hello package draws a screen, reacts to the joystick, and records
 each launch in its saved-data directory.
 
-See the [launcher plan](SD_APP_LAUNCHER_PLAN.md) for scope. On the goggles,
-the console runner and the display hand-off with the graphical Hello have
-been bench-tested from an internal package folder (see the
-[bench results](SD_APP_BENCH_2026-11-16.md)). The card is readable during a
-Natartos session, but no package has been launched from it yet, and the
-menu entries have **not yet run on the device** (see [Next device check](#next-device-check-menu-entries-and-display)).
+See the [launcher plan](SD_APP_LAUNCHER_PLAN.md) for scope. The
+[initial bench](SD_APP_BENCH_2026-11-16.md) used an internal package. The
+[2026-11-17 bench](SD_APP_BENCH_2026-11-17.md) installed the matched runner and
+overlay, ran Hello from the SD card through More, and checked the missing-overlay
+guard and cleanup after killing a runner. The menu launch returned through a
+clean repaint; the deliberate runner-kill test used the existing UI-restart
+fallback. More extensive menu/device validation remains separate.
 
 ## Build
 
@@ -44,6 +45,9 @@ Products are in `build/aarch64/`:
 - `mod_sd_apps.so`: the mod that registers one More-menu entry per SD app.
 - `hook_menu.so`: the menu mod with the raised entry limit (32) that the
   per-app entries need; the released 0.1.0 menu allows 8.
+- `hook_overlay.so`: the overlay with the SD display acknowledgement and
+  ownership leases. Update this together with the runner for display apps;
+  an older overlay cannot acknowledge them, so the runner refuses to launch.
 - `natartos_loader.so` and `mod_template.so`: build-baseline checks when
   `--framework` is used; they are not needed for SD apps.
 
@@ -172,18 +176,34 @@ an unreadable card, the mod registers nothing and the menu is unchanged.
 
 ## Display apps
 
-With `"display": true` the runner takes the screen just before starting the
-app, following the same protocol as the Doom and PC Stream launchers:
+With `"display": true` the runner uses the existing Doom/PC Stream frame format
+with an additional SD session handshake:
 
-1. Refuse with exit 125 if `fb_override` already exists (another app owns the
-   screen). Otherwise remove a stale `fb_stop`, create a fresh 16,588,864-byte
-   `fb_shared` (mode 0644), then create `fb_override`. `hook_overlay.so` then
-   shows frames from `fb_shared` instead of the DJI interface.
-2. Stop the app (SIGTERM, SIGKILL after 2 s, exit 143) if `fb_stop` appears or
-   `fb_override` disappears; the overlay and Toolya use these to stop apps.
-3. After the app and its process group are gone, remove `fb_override`,
-   `fb_stop` and `fb_shared`. The overlay then repaints the DJI interface by
-   injecting a BACK key, so the app's input grab must already be released.
+1. Acquire the exclusive `fb_owner.lock` lease, shared across all runner cache
+   paths. Refuse an active owner or a legacy app's `fb_override` with exit 125.
+   A recognised SD frame whose owner lease is free can be reclaimed. Remove
+   its flag and wait up to five seconds for the previous overlay's cleanup.
+2. Create a fresh 16,588,864-byte `fb_shared` (mode 0644), write the SD protocol
+   marker in its reserved header, then create `fb_override`. Wait up to five
+   seconds for the overlay to acknowledge this exact frame inode. Its inject
+   thread acknowledges only after finding a display buffer. Missing/old
+   overlays and missing display buffers therefore fail with exit 125 **before
+   the app starts or grabs any buttons**.
+3. Stop the app (SIGTERM, SIGKILL after 2 s, exit 143) if `fb_stop` appears,
+   `fb_override` disappears, or the overlay's lease is released by its death.
+   Conversely, the overlay detects the runner's death through the owner lease
+   and cleans up, even when SIGKILL prevented the runner's own cleanup.
+4. After the app's process group is gone, remove `fb_override`. Keep the owner
+   lease while the overlay repaints and holds `fb_overlay.lock`, so cleanup
+   cannot remove a subsequent app's files. Wait at most five seconds; if the
+   overlay is still busy, leave its files for cleanup and make the next launch
+   wait for it. If both processes died, the next launch reclaims the stale SD
+   files and requires a fresh acknowledgement.
+
+The two lock files are persistent inodes and must **never be unlinked** during
+cleanup or injection. The kernel releases their locks when a process dies;
+their mere presence does not mean a session is active. Legacy Doom and PC
+Stream frames have no SD marker and retain their existing protocol.
 
 The files live in `/data/local/tmp` (`--display-dir` overrides it for tests).
 Display apps also receive:
@@ -201,7 +221,8 @@ The app contract, implemented by
   BGRA pixels into the slot the overlay is not showing and then increment the
   frame counter (`nat_fb_publish`). Layout: 64-byte header with a `u32`
   counter at offset 0, then two 1920×1080×4 slots; the overlay shows slot
-  `counter & 1`.
+  `counter & 1`. Bytes 8–19 belong to the launcher/overlay handshake; apps
+  must preserve the header apart from their frame counter.
 - **Buttons:** open the listed devices and take an exclusive `EVIOCGRAB`, as
   Doom does, so the hidden DJI menu does not also react. `KEY_ENTER` is the
   5D press and `KEY_BACK` is BACK. The joystick reports its directions rotated
@@ -245,15 +266,23 @@ rejection, ELF compatibility, cache reuse/corruption, storage budgets, saved
 data, shell-literal argv, output limits, crashes, hangs, cancellation and
 cleanup, plus a root path with a search-only ancestor.
 
-The suite now has 64 checks. The additions cover the menu listing, the SD
+The earlier 64-check suite covered the menu listing, the SD
 Apps mod (`mod_check` compiles `mods/sd_apps/mod.c` for the host against
 `tests/sd_apps/shim/natartos_common.h`, feeds it the runner's real listing and
 crafted unsafe lines, and runs the command it registers), descriptor closing,
 and the display hand-off driven through a FIFO standing in for the buttons:
 BACK exit, a busy screen, both overlay stop paths, an app ignoring SIGTERM,
 and a crash. All 64 passed on x86-64 Linux (WSL) with both the Zig/musl and
-GCC 13/glibc builds; the ARM64 VM run has not been repeated. Host tests do not
-establish DJI display, menu (Embedded Wizard) or SELinux behavior.
+GCC 13/glibc builds. On 2026-11-17 the suite was extended to 76 checks, including
+missing overlays/buffers, cancelled handshakes, stale acknowledgements,
+legacy sessions, ownership across cache roots, killed runners, killed overlays,
+and recovery after both die. The host overlay fixture uses the actual overlay
+lease/acknowledgement helper with real file locks and a simulated repaint
+delay. All 76 passed in both x86-64 and ARM64 Linux QEMU guests with Zig/musl
+builds; the matched production ARM64 runner and overlay also compiled.
+The fixture does not emulate the DJI compositor. Host tests do not establish DJI
+display, menu (Embedded Wizard) or SELinux behavior; these changes need a new
+device check with the matched runner and overlay.
 
 ## First device check
 
@@ -314,13 +343,15 @@ fell back to restarting `dji_glasses` to repaint the UI. Stage B is still
 open. Use a charged battery, outside flight operation, with the current
 firmware and mounts re-confirmed. Nothing here writes to `/system`.
 
-**Stage A: display hand-off from ADB (no `/vendor` changes).** Requires an
-active Natartos session with the overlay mod (`toolya natartos start`). The
+**Stage A: display hand-off from ADB.** Requires an active Natartos session
+with the updated overlay mod (`toolya natartos start`). Installing that overlay
+is a separate `/vendor` change; agree the device steps before doing it. The
 log `/data/local/tmp/natartos.log` survives a `dji_glasses` restart, so
 confirm its latest loader start (`hook_overlay loaded`, `HOOK ALIVE`) is newer
 than the current `dji_glasses` (modification time of `/dev/input/event3`).
-Without the overlay, a display app holds the buttons with nothing on screen
-until BACK.
+The updated runner refuses a display app if the overlay does not acknowledge
+within five seconds, before any button grab. The old log-age check remains
+useful context but is no longer the launch precondition.
 
 1. Replace `/data/local/tmp/sd_app_runner` with the new build (check its
    SHA-256 against `build-info.json`) and copy the new Hello package, whose

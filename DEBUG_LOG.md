@@ -86,3 +86,40 @@
   `mods/menu/RE_MENU.md` corrected.
 - **Class:** abi-wrong-callee-arity
 - **Recently-touched?** partly — upstream code, exposed by the rebuilt mod.
+
+## 2026-11-17 — Guard display launches and recover killed sessions
+
+- **Observation:** the Stage A missing-overlay failure above could start an
+  invisible app that held the buttons. A host review also reproduced SIGKILL
+  leaving `fb_override` and `fb_shared`, blocking the next display launch.
+- **Root cause:** `display_claim` treated flag creation as readiness; cleanup
+  depended on the runner returning through `display_release`.
+- **Fix:** the overlay now acknowledges the specific frame inode only after its
+  inject thread has found a display buffer. The runner waits before starting
+  the app. Persistent runner/overlay file-lock leases detect participant death,
+  protect cleanup through repaint, and allow the next launch to recover stale
+  SD files without taking over legacy apps. This supersedes the pending fix in
+  the 2026-11-16 missing-overlay entry.
+- **Validation:** the Linux suite exercises the real overlay lease helper,
+  missing readiness, stale acknowledgements, cancellation, legacy sessions,
+  cross-cache ownership, SIGKILL and recovery. All 76 checks passed in x86-64
+  and ARM64 QEMU guests; the production ARM64 build succeeds. These are host
+  checks; the updated overlay and runner have not been installed or tested
+  on the goggles in this work.
+- **Class:** display-lifecycle-ownership
+- **Recently-touched?** yes — the runner's new display hand-off.
+
+## 2026-11-17 — Device validation of the display lifecycle fixes
+
+- **Result:** installed the matched production runner and overlay on retail
+  build 35808 after backing up and verifying the previous files. The missing-
+  overlay check failed before app launch as intended. A deliberate runner
+  SIGKILL was detected by the overlay, which removed the display files.
+- **UI observation:** that ADB-started kill test used the existing repaint
+  restart fallback; the owner confirmed normal controls immediately afterward.
+  More-menu Hello launches before and after the kill test succeeded, and the
+  owner confirmed all controls and BACK return on the final launch. See
+  `docs/SD_APP_BENCH_2026-11-17.md` for the evidence boundaries.
+- **Installation observation:** the first `/vendor` read-only remount was busy
+  until Natartos restarted. Subsequent checks confirmed `/vendor` and `/system`
+  read-only and the installed hashes matched the tested build.

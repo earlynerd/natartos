@@ -126,7 +126,8 @@ cd src && make                   # builds natartos_loader.so
 
 - [SD app runner](docs/SD_APP_RUNNER.md) — build, test, and bench commands for
   the SD launcher: per-app menu entries, the display/input contract for apps,
-  and the graphical Hello example (host-tested; device check pending).
+  and the graphical Hello example (SD/menu launch and display guards bench-tested;
+  see the dated bench reports for results and remaining checks).
 - [SD card application launcher plan](docs/SD_APP_LAUNCHER_PLAN.md) — scope,
   package format, milestones, and validation for this fork's planned launcher.
 - [MOD_SPEC.md](MOD_SPEC.md) — mod descriptor and how to write a mod

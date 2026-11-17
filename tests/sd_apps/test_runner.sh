@@ -3,7 +3,12 @@
 set -eu
 B=$(cd "$1" && pwd)
 T=$(mktemp -d "${TMPDIR:-/tmp}/sd-app-tests.XXXXXX")
-trap 'rm -rf "$T"' EXIT
+overlay=
+cleanup() {
+    if [ -n "$overlay" ]; then kill "$overlay" 2>/dev/null || :; wait "$overlay" 2>/dev/null || :; fi
+    rm -rf "$T"
+}
+trap cleanup EXIT
 mkdir -p "$T/apps"
 cp -R "$B/apps/hello" "$T/apps/hello"
 R="$B/sd_app_runner"
@@ -248,7 +253,15 @@ exec 7<>"$T/keys"   # keeps the FIFO open, so apps never see end-of-input
 drun() { "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" --display-dir "$D" --input "$T/keys" --timeout 20 "$@"; }
 key() { "$B/fixture" key "$1" "$2" >&7; }
 drawn() { c=$(od -An -tu4 -N4 "$D/fb_shared" | tr -d ' '); [ -n "$c" ] && [ "$c" -gt 0 ]; }
-released() { [ ! -e "$D/fb_override" ] && [ ! -e "$D/fb_shared" ] && [ ! -e "$D/fb_stop" ]; }
+released() { [ ! -e "$D/fb_override" ] && [ ! -e "$D/fb_shared" ] && [ ! -e "$D/fb_stop" ] && [ ! -e "$D/cleaning" ]; }
+start_overlay() { rm -f "$D/attached"; "$B/overlay_fixture" "$D" "${1:-0}" & overlay=$!; }
+stop_overlay() { kill "$overlay"; wait "$overlay"; overlay=; }
+start_display() {
+    # Direct exec matters: $app must be the runner, not a shell wrapping it.
+    "$R" --apps "$T/apps" --cache "$T/cache" --data "$T/data" \
+        --display-dir "$D" --input "$T/keys" --timeout 20 run hello >"$T/display.out" 2>"$T/display.err" &
+    app=$!
+}
 
 cp "$B/apps/hello/app.json" "$T/apps/hello/app.json"
 expect 0 'example manifest is a display app' run validate hello
@@ -259,12 +272,53 @@ EOF
 expect 125 'display flag must be boolean' run validate hello
 display_manifest '[]'
 before=$(wc -l <"$T/data/hello/launches.txt")
+expect 125 'missing overlay refuses display app before launch' drun run hello
+grep -q 'overlay did not acknowledge' "$T/err"
+[ "$(wc -l <"$T/data/hello/launches.txt")" -eq "$before" ]
+released
+
+# An old frame acknowledgement cannot acknowledge a new frame inode.
+truncate -s 16588864 "$D/fb_shared"
+printf 'NATSD01\000' | dd of="$D/fb_shared" bs=1 seek=8 conv=notrunc 2>/dev/null
+printf '\001\000\000\000' | dd of="$D/fb_shared" bs=1 seek=16 conv=notrunc 2>/dev/null
+touch "$D/fb_override"
+expect 125 'stale acknowledgement does not bypass overlay handshake' drun run hello
+grep -q 'overlay did not acknowledge' "$T/err"
+[ "$(wc -l <"$T/data/hello/launches.txt")" -eq "$before" ]
+released
+
+start_overlay 1
+expect 125 'overlay without display buffers cannot start the app' drun run hello
+[ "$(wc -l <"$T/data/hello/launches.txt")" -eq "$before" ]
+released
+start_display
+wait_until test -e "$D/attached"
+kill -TERM "$app"
+expect 143 'cancelling the overlay handshake never starts the app' wait "$app"
+[ "$(wc -l <"$T/data/hello/launches.txt")" -eq "$before" ]
+released
+stop_overlay
+start_overlay
+
+# The overlay still supports the zero-filled legacy header, and the SD
+# runner must not reclaim a legacy app merely because it has no owner lease.
+truncate -s 16588864 "$D/fb_shared"
+touch "$D/fb_override"
+wait_until test -e "$D/attached"
+expect 125 'legacy display session remains active and cannot be reclaimed' drun run hello
+[ -e "$D/fb_override" ] && [ -e "$D/fb_shared" ]
+touch "$D/fb_stop"
+wait_until released
 drun run hello >"$T/display.out" 2>"$T/display.err" &
 app=$!
 wait_until test -f "$D/fb_override"
 wait_until drawn
 [ "$(wc -c <"$D/fb_shared")" -eq 16588864 ]
 [ "$(wc -l <"$T/data/hello/launches.txt")" -eq $((before + 1)) ]
+[ ! -e "$D/cleaning" ]
+expect 125 'display owner lease covers runners using a different cache' "$R" \
+    --apps "$T/apps" --cache "$T/other-cache" --data "$T/data" --display-dir "$D" run hello
+grep -q 'another display app runner is active' "$T/err"
 key 28 1; key 28 0       # 5D press: colour change, redraw
 key 158 1; key 158 0     # BACK: Hello exits on release
 expect 0 'display app exits on BACK and returns the screen' wait "$app"
@@ -305,6 +359,49 @@ pid=$(cat "$T/data/hello/self.pid")
 if [ -e "/proc/$pid/stat" ]; then grep -q ' Z ' "/proc/$pid/stat"; fi
 display_manifest '["crash"]'
 expect 139 'crashed display app returns the screen' drun run hello
+released
+
+display_manifest '["sleep"]'
+rm -f "$T/data/hello/self.pid"
+start_display
+wait_until test -f "$T/data/hello/self.pid"
+pid=$(cat "$T/data/hello/self.pid")
+kill -KILL "$app"
+expect 137 'runner killed during display app' wait "$app"
+wait_until released
+if [ -e "/proc/$pid/stat" ]; then grep -q ' Z ' "/proc/$pid/stat"; fi
+passed=$((passed+1)); echo 'PASS: overlay reclaims ownership when the runner dies'
+
+# Kill both participants so no process is left to clean the flags. The next
+# runner may reclaim this recognised SD session, but must do a fresh handshake.
+rm -f "$T/data/hello/self.pid"
+start_display
+wait_until test -f "$T/data/hello/self.pid"
+kill -STOP "$app"
+kill -KILL "$overlay"
+wait "$overlay" 2>/dev/null || :
+overlay=
+kill -KILL "$app"
+expect 137 'runner and overlay killed without cleanup' wait "$app"
+[ -e "$D/fb_override" ] && [ -e "$D/fb_shared" ]
+start_overlay
+cp "$B/apps/hello/bin/hello" "$T/apps/hello/bin/hello"
+display_manifest '[]'
+start_display
+wait_until drawn
+key 158 1; key 158 0
+expect 0 'next launch recovers stale display ownership' wait "$app"
+released
+
+cp "$B/fixture" "$T/apps/hello/bin/hello"
+display_manifest '["sleep"]'
+rm -f "$T/data/hello/self.pid"
+start_display
+wait_until test -f "$T/data/hello/self.pid"
+kill -KILL "$overlay"
+wait "$overlay" 2>/dev/null || :
+overlay=
+expect 143 'overlay death stops the display app and releases ownership' wait "$app"
 released
 exec 7<&-
 restore

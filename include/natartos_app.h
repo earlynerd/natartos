@@ -10,7 +10,9 @@
  * overlay flag (/data/local/tmp/fb_override) exists. The layout matches what
  * the overlay's inject thread reads and what fb_receiver writes:
  *
- *   offset 0                 u32 frame counter; rest of the 64-byte header unused
+ *   offset 0                 u32 frame counter
+ *   offsets 8-19             launcher/overlay handshake; apps must leave unchanged
+ *   rest of 64-byte header   reserved
  *   offset 64                slot 0: 1920x1080 pixels, bytes B,G,R,A
  *   offset 64 + slot bytes   slot 1
  *

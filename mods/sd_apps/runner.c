@@ -2,6 +2,7 @@
 #include "package.h"
 #include "sha256.h"
 #include "natartos_app.h"
+#include "natartos_display.h"
 
 #include <dirent.h>
 #include <errno.h>
@@ -430,9 +431,30 @@ static int64_t milliseconds(void) {
 typedef struct {
     char override[PATH_MAX], stop[PATH_MAX], frame[PATH_MAX];
     const char *inputs;
+    int owner, overlay, frame_fd;
     int claimed;
     int lost;   /* fb_override disappeared: the overlay already cleaned up */
 } display_ctx;
+
+static int display_overlay_idle(display_ctx *d) {
+    if (flock(d->overlay, LOCK_EX | LOCK_NB))
+        return errno == EWOULDBLOCK || errno == EAGAIN ? 0 : -1;
+    flock(d->overlay, LOCK_UN);
+    return 1;
+}
+
+static int display_wait_idle(display_ctx *d) {
+    int64_t until = milliseconds() + NAT_DISPLAY_WAIT_MS;
+    /* Keep the lease once acquired, so a watcher cannot attach between the
+     * stale-file check and publication of this session's new frame file. */
+    while (flock(d->overlay, LOCK_EX | LOCK_NB)) {
+        if (errno != EWOULDBLOCK && errno != EAGAIN) return -1;
+        if (milliseconds() >= until) return -1;
+        struct timespec pause = {0, 20000000};
+        nanosleep(&pause, NULL);
+    }
+    return 0;
+}
 
 static int present(const char *path) {
     struct stat st;
@@ -441,12 +463,38 @@ static int present(const char *path) {
 
 static int display_claim(display_ctx *d, const char *dir, const char *inputs) {
     memset(d, 0, sizeof(*d));
+    d->owner = d->overlay = d->frame_fd = -1;
     d->inputs = inputs;
     if (snprintf(d->override, sizeof(d->override), "%s/fb_override", dir) >= (int)sizeof(d->override) ||
         snprintf(d->stop, sizeof(d->stop), "%s/fb_stop", dir) >= (int)sizeof(d->stop) ||
         snprintf(d->frame, sizeof(d->frame), "%s/fb_shared", dir) >= (int)sizeof(d->frame))
         return fail("display directory path too long");
-    if (present(d->override)) return fail("another display app is active (fb_override exists)");
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/" NAT_DISPLAY_OWNER, dir);
+    d->owner = regular(AT_FDCWD, path, O_RDWR | O_CREAT, 0600);
+    if (d->owner < 0) return -1;
+    if (flock(d->owner, LOCK_EX | LOCK_NB)) {
+        /* Close this unlocked descriptor; release must not touch another owner. */
+        close(d->owner); d->owner = -1;
+        return fail("another display app runner is active");
+    }
+    snprintf(path, sizeof(path), "%s/" NAT_DISPLAY_OVERLAY, dir);
+    d->overlay = regular(AT_FDCWD, path, O_RDWR | O_CREAT, 0600);
+    if (d->overlay < 0) return -1;
+    if (present(d->override)) {
+        /* Only reclaim a recognisable SD session after acquiring its owner
+         * lease. Empty legacy flags (Doom/PC Stream) remain busy. */
+        int old = regular(AT_FDCWD, d->frame, O_RDONLY, 0);
+        char magic[NAT_DISPLAY_MAGIC_BYTES];
+        int ours = old >= 0 && pread(old, magic, sizeof(magic), NAT_DISPLAY_MAGIC_OFFSET) == sizeof(magic) &&
+                   !memcmp(magic, NAT_DISPLAY_MAGIC, sizeof(magic));
+        if (old >= 0) close(old);
+        if (!ours) return fail("another display app is active (fb_override exists)");
+        if (unlink(d->override) && errno != ENOENT) return syserror("release stale display");
+    }
+    if (display_wait_idle(d)) return fail("previous overlay cleanup did not finish");
+    if (interrupted) return fail("interrupted while waiting for display");
+    if (present(d->override)) return fail("another display app claimed the screen");
     /* A stale stop request would end this app as soon as the overlay attaches. */
     if (unlink(d->stop) && errno != ENOENT) return syserror("remove stale fb_stop");
     if (unlink(d->frame) && errno != ENOENT) return syserror("remove stale fb_shared");
@@ -459,7 +507,10 @@ static int display_claim(display_ctx *d, const char *dir, const char *inputs) {
         close(fd); unlink(d->frame);
         return -1;
     }
-    close(fd);
+    if (pwrite(fd, NAT_DISPLAY_MAGIC, NAT_DISPLAY_MAGIC_BYTES, NAT_DISPLAY_MAGIC_OFFSET) != NAT_DISPLAY_MAGIC_BYTES) {
+        syserror("write display handshake"); close(fd); unlink(d->frame); return -1;
+    }
+    d->frame_fd = fd;
     fd = open(d->override, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0644);
     if (fd < 0) {
         int saved = errno;
@@ -470,22 +521,42 @@ static int display_claim(display_ctx *d, const char *dir, const char *inputs) {
     fchmod(fd, 0644);
     close(fd);
     d->claimed = 1;
-    return 0;
+    flock(d->overlay, LOCK_UN);
+    int64_t until = milliseconds() + NAT_DISPLAY_WAIT_MS;
+    while (!interrupted && milliseconds() < until) {
+        unsigned ack = 0;
+        if (pread(d->frame_fd, &ack, sizeof(ack), NAT_DISPLAY_ACK_OFFSET) == sizeof(ack) &&
+            ack == NAT_DISPLAY_ACK_READY && display_overlay_idle(d) == 0) return 0;
+        if (!present(d->override) || present(d->stop)) break;
+        struct timespec pause = {0, 20000000};
+        nanosleep(&pause, NULL);
+    }
+    return fail(interrupted ? "interrupted while waiting for overlay" :
+                "overlay did not acknowledge display; start the updated Natartos overlay first");
 }
 
 /* Nonzero once the overlay or Toolya has asked the display app to stop. */
 static int display_stop_requested(display_ctx *d) {
     if (!present(d->override)) { d->lost = 1; return 1; }
-    return present(d->stop);
+    return present(d->stop) || display_overlay_idle(d) != 0;
 }
 
 /* Give the screen back. Call only after the app's process group is gone, so
  * its input grab is released before the overlay injects the repaint key. */
 static void display_release(display_ctx *d) {
-    if (!d->claimed) return;
-    if (!d->lost) unlink(d->override);
-    unlink(d->stop);
-    unlink(d->frame);
+    if (d->claimed) {
+        if (!d->lost) unlink(d->override);
+        /* Keep the owner lease while the overlay repaints. A subsequent app
+         * must not have its files removed by this session's cleanup. */
+        if (!display_wait_idle(d)) {
+            unlink(d->stop);
+            unlink(d->frame);
+        }
+    }
+    if (d->frame_fd >= 0) close(d->frame_fd);
+    if (d->overlay >= 0) close(d->overlay);
+    if (d->owner >= 0) close(d->owner);
+    d->owner = d->overlay = d->frame_fd = -1;
     d->claimed = 0;
 }
 
@@ -912,9 +983,11 @@ int main(int argc, char **argv) {
     if (logs < 0) goto done;
     staged = directory(app, digest, 0);
     if (staged < 0) goto done;
-    display_ctx display = {0};
+    display_ctx display = {.owner = -1, .overlay = -1, .frame_fd = -1};
     /* Claim the screen only once the verified copy is ready to execute. */
-    if (manifest.display && display_claim(&display, display_dir, inputs)) goto done;
+    if (manifest.display && display_claim(&display, display_dir, inputs)) {
+        display_release(&display); goto done;
+    }
     fflush(stdout);
     rc = run_app(staged, package, source_path, save, &manifest, logs, timeout,
                  manifest.display ? &display : NULL);

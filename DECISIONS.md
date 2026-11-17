@@ -42,3 +42,19 @@ for this fork. Newer applicable entries supersede older decisions.
 - **Affects:** `include/natartos_common.h`, `mods/menu/mod.c`,
   `mods/sd_apps/` (mod, runner, manifest), `include/natartos_app.h`,
   `examples/sd_apps/hello/`, tests, CI skip list. Device validation pending.
+
+## 2026-11-17 — Acknowledge SD display sessions and lease their ownership
+
+- **Decision:** require an acknowledgement in the fresh frame inode before
+  launching a display app. Hold persistent file-lock leases for the runner's
+  ownership and the overlay's attachment through repaint. Bound handshake and
+  cleanup waits to five seconds; recognise dead SD sessions for recovery.
+- **Why:** a file flag alone neither proves a live overlay nor distinguishes
+  a killed runner from an active app. Kernel-released leases detect death
+  without trusting stale PIDs. Keeping the overlay lease through cleanup also
+  prevents an old session from deleting the next app's files.
+- **Supersedes:** the flag-only SD display hand-off in the 2026-11-16 entry.
+  Legacy Doom/PC Stream keep their existing frame format and flags.
+- **Affects:** runner, overlay, reserved frame-header bytes 8–19, and the matched
+  runner/overlay build. This changes the host implementation; device validation
+  remains separate.
