@@ -63,3 +63,26 @@
   `docs/SD_APP_RUNNER.md`.
 - **Class:** environment-precondition
 - **Recently-touched?** no — device policy, not runner code.
+
+## 2026-11-16 — More menu crashed dji_glasses after the menu mod was rebuilt
+
+- **Observation:** with the rebuilt `hook_menu.so` (Zig/Clang) and four
+  injected entries, opening More crashed `dji_glasses` (SIGSEGV, fault
+  address `0x2f3`, exit 139) twice; `inject.sh` respawned it each time.
+  The released GCC build had worked with three entries.
+- **Root cause:** `inject_items` finished with a hard-coded `vmt[58](self)`,
+  meant as "Postreload". On firmware 35808 slot 58 (`+0x1d0`) is
+  `MxBindableMenu_DoPreFocus(self, view)`, which passes `view` straight to
+  `ViewsImage_OnGetVisible` (reads `view+0x40`). No view was passed, so `x1`
+  held a leftover value: `0x2b3` in the Clang build. The release GCC build
+  calls through `x1`, so `view` was the function's own address; the word at
+  `+0x40` is a `ret` instruction with bit 0 clear, so DoPreFocus returned
+  early. The release build worked by accident; the fourth entry was
+  incidental. Postreload is slot 60 (`+0x1e0`), as in the stock
+  `MxBindableAbstractMenu_Reload`. Found from the tombstone registers and
+  disassembly of `libew_gls.so` and both menu builds.
+- **Fix:** call `MxBindableAbstractMenu__Postreload` (EW's virtual dispatcher,
+  resolved with `dlsym`) instead of a vtable index; skip it if unresolved.
+  `mods/menu/RE_MENU.md` corrected.
+- **Class:** abi-wrong-callee-arity
+- **Recently-touched?** partly — upstream code, exposed by the rebuilt mod.

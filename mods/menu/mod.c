@@ -25,6 +25,7 @@ extern void *dlsym(void *handle, const char *symbol);
 typedef void (*reload_fn)(void *self);
 typedef void (*add_item_fn)(void *self, void *itemdata);
 typedef void (*set_noi_fn)(void *, int);
+typedef void (*postreload_fn)(void *self);
 typedef void *(*new_str_fn)(const char *ascii);
 typedef int (*system_fn)(const char *cmd);
 
@@ -42,6 +43,7 @@ static reload_fn g_orig_reload = 0;
 static void *g_more_menu_vmt = 0;
 static add_item_fn g_add_item_from_data = 0;
 static set_noi_fn g_set_noi = 0;
+static postreload_fn g_postreload = 0;
 static new_str_fn g_new_str = 0;
 static system_fn g_system = 0;
 static create_bmp_fn g_create_bmp = 0;
@@ -346,8 +348,13 @@ static void inject_items(void *self, void *menudata) {
     }
 
     if (g_set_noi) g_set_noi(self, 0);
-    void **vmt = (void **)g_more_menu_vmt;
-    ((void (*)(void *))vmt[58])(self);
+    /* Finish the way the stock MxBindableAbstractMenu_Reload does after adding
+     * its own items: call Postreload through EW's virtual dispatcher, which
+     * reads the right vtable slot for the running firmware. The old hard-coded
+     * vmt[58] is MxBindableMenu_DoPreFocus(self, view) on build 35808; called
+     * without a view it read a leftover register and crashed in
+     * ViewsImage_OnGetVisible (GCC builds happened to pass a harmless value). */
+    if (g_postreload) g_postreload(self);
     NTLOG_INT("inject: done, items=", g_slot_count);
 }
 
@@ -384,6 +391,9 @@ int natartos_mod_init(void *(*loader_dlsym)(void *, const char *)) {
         "MxBindableAbstractMenu_AddItemFromData");
     g_set_noi = (set_noi_fn)loader_dlsym(RTLD_DEFAULT,
         "CoreVerticalList_OnSetNoOfItems");
+    g_postreload = (postreload_fn)loader_dlsym(RTLD_DEFAULT,
+        "MxBindableAbstractMenu__Postreload");
+    NTLOG_HEX("postreload=", (unsigned long)g_postreload);
     g_new_str = (new_str_fn)loader_dlsym(RTLD_DEFAULT,
         "EwNewStringAnsi");
     g_system = (system_fn)loader_dlsym(RTLD_DEFAULT, "system");
