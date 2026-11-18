@@ -1,9 +1,11 @@
 # Marker proxy service test — 2026-11-17
 
 The production marker proxy executed in the stock GPS consumer on a retail
-build 35808 device during a controlled service restart. The original GPS
-library was restored afterward. This was a warm service test with SELinux
-already permissive, not a cold-boot or enforcing-mode validation.
+build 35808 device during a controlled service restart and a subsequent full
+power cycle. The cold-boot marker recorded `stock=ready` in `dji_services` with
+**SELinux enforcing** before Natartos was started. The original GPS library
+was restored after both phases. This validates the marker execution point;
+it does not implement unattended Natartos activation or establish a position fix.
 
 Candidate source: `9b34102` (bench instructions clarified in `358e2a2`).
 ARM64 candidate SHA-256:
@@ -97,7 +99,66 @@ At completion of this phase:
 - The unused stock copy, marker and private staged backups were retained.
   No proxy was left active at the boot-loading path.
 
-Private command transcripts, raw logs, unit-specific identifiers, marker boot
-IDs, original binaries and screenshots remain outside this source repository.
-Cold boot, enforcing-mode operation, satellite fix and flight operation remain
-unvalidated.
+Cold boot and enforcing-mode operation were still pending at the end of that
+first phase. The follow-up below records their separate validation. Private
+command transcripts, raw logs, unit-specific identifiers, marker boot IDs,
+original binaries and screenshots remain outside this source repository.
+
+## Cold-boot follow-up
+
+The owner authorized the cold-boot test and was available for the power cycle
+and Toolya steps. The same production proxy was installed after rechecking its
+source/artifact hashes, the stock backup, ownership and labels. `/vendor` was
+returned to read-only before the handoff. A five-minute detached stock-restore
+timer protected a delayed handoff in the existing session only; powering off
+kills that timer. It was not a recovery mechanism for the next boot.
+
+The owner powered the goggles off and back on, then completed Toolya's
+**Enable ADB → Root** steps while leaving **Natartos stopped**. The owner
+reported a normal boot. The host observed a different boot ID and exactly one
+new record for that boot:
+
+```text
+uid=0 euid=0 gid=0 egid=0 stock=ready context=u:r:dji_services:s0 CapEff=0000003fffffffff enforcing=1
+```
+
+The marker's boot ID matched the live new boot, not either earlier warm-service
+record. The proxy and stock-copy hashes still matched their expected bytes,
+and `init.svc.dji_sys` was `running`. This establishes that the proxy resolved
+the original getter and wrote its marker during a cold boot under enforcement.
+
+The post-entry `su` shell was denied both reading `/sys/fs/selinux/enforce`
+and running `getenforce`. The affirmative runtime measurement above came
+from the probe in `dji_services`, not from interpreting a denied shell read.
+The boot command line also declared enforcing SELinux and enforcing verity,
+which is corroboration rather than a substitute for the marker's measurement.
+
+Available GNSS logs continued reporting status `1`; a report with `num_svs 1`
+was captured before Natartos startup. This supports continued status reporting,
+not a verified position fix or complete GNSS regression test. Init/start return
+codes still were not available in the collected live log.
+
+After the enforcing evidence was saved, the host ADB server was released so
+the owner could start Natartos in Toolya. On reconnection the host observed
+Natartos mapped and runtime enforcement `0`, consistent with the existing
+Natartos startup workflow. The bench scripts did not execute a permission
+toggle or physical-memory command themselves.
+
+The detached restoration script then republished the verified original library,
+restarted the stock service and returned `/vendor` to read-only. The existing
+Natartos UI was refreshed again after that service restart. Through the bridge,
+the host observed the normal HUD, menu opening, two DOWN taps selecting
+Transmission, and BACK closing the menu.
+
+Final checks found:
+
+- Both GPS paths held the original stock hash; only the original boot-loading
+  path was active. The unused stock-copy file and marker were retained.
+- `dji_sys` was running; the original GPS library was mapped again.
+- `/system` remained read-only on `dm-0`, and `/vendor` was read-only.
+- Natartos was running in the owner's ordinary permissive session after cleanup.
+
+This is one successful cold-boot marker test on build 35808, followed by a
+verified restoration in a working root/permissive session. It is not proof of
+recovery from an unbootable device, compatibility with another firmware build,
+unattended launcher startup, satellite navigation performance or flight safety.
