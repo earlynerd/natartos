@@ -45,5 +45,5 @@ poweroff -f
     except subprocess.TimeoutExpired as e:output=(e.stdout or b"").decode(errors="replace")+"\nVM_TIMEOUT\n"
     (out/"test-output.log").write_text(output)
     print(output)
-    if not all(marker in output for marker in ["BOOT_PROFILE_TESTS_PASSED","BOOT_SUPERVISOR_TESTS_PASSED=24","BOOT_TRIGGER_TESTS_PASSED=7","BOOT_ACTIVATION_PROFILE_EXIT=0","BOOT_ACTIVATION_VM_EXIT=0","BOOT_ACTIVATION_TRIGGER_EXIT=0"]):p.exit(1,"Activation fixtures failed\n")
+    if not all(marker in output for marker in ["BOOT_PROFILE_TESTS_PASSED","BOOT_SUPERVISOR_TESTS_PASSED=25","BOOT_TRIGGER_TESTS_PASSED=7","BOOT_ACTIVATION_PROFILE_EXIT=0","BOOT_ACTIVATION_VM_EXIT=0","BOOT_ACTIVATION_TRIGGER_EXIT=0"]):p.exit(1,"Activation fixtures failed\n")
 if __name__=="__main__":main()

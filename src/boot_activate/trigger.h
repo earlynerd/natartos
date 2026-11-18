@@ -60,6 +60,7 @@ static void boot_activation_start(void){
         if(detached!=0)goto child_exit;
         long nullfd=raw_open("/dev/null",2|02000000);
         if(nullfd<0)goto child_exit;
+        if(raw_call(NR_fcntl,nullfd,2 /* F_SETFD */,0,0,0)<0)goto child_exit;
         for(long i=0;i<3;i++)if(nullfd!=i)(void)raw_call(NR_dup3,nullfd,i,0,0,0);
         if(nullfd>2)raw_close(nullfd);
         const char *args[]={TRIGGER_HELPER,"--boot",NULL};

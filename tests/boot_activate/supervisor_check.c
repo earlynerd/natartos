@@ -34,7 +34,7 @@ static pid_t spawn(void){
     }return p;
 }
 static int finish(pid_t p){
-    int status;for(unsigned i=0;i<400;i++){pid_t n=waitpid(p,&status,WNOHANG);if(n==p)return status;assert(n==0||errno==EINTR);pause_ms(10);}
+    int status;for(unsigned i=0;i<800;i++){pid_t n=waitpid(p,&status,WNOHANG);if(n==p)return status;assert(n==0||errno==EINTR);pause_ms(10);}
     kill(p,SIGKILL);waitpid(p,&status,0);assert(!"supervisor exceeded timeout");return status;
 }
 static void wait_for(const char *path,const char *needle){for(unsigned i=0;i<300;i++){if(contains(path,needle))return;pause_ms(10);}assert(!"expected state timed out");}
@@ -44,7 +44,7 @@ static void manifest(void){
     for(unsigned i=0;i<2;i++){int fd=open(paths[i],O_RDONLY);assert(fd>=0);struct stat st;assert(!fstat(fd,&st));char hex[65];assert(!boot_sha256_fd(fd,(uint64_t)st.st_size,hex));close(fd);fprintf(f,"%s %s\n",hex,paths[i]);}assert(!fclose(f));
 }
 static void reset(void){
-    unlink("/fixture/state/state");unlink("/fixture/state/disabled");unlink("/fixture/disabled");unlink("/fixture/manual.pid");unlink("/fixture/legacy.count");unlink("/fixture/starts");
+    unlink("/fixture/state/state");unlink("/fixture/state/disabled");unlink("/fixture/disabled");unlink("/fixture/manual.pid");unlink("/fixture/legacy.count");unlink("/fixture/starts");unlink("/fixture/flood");
     text("/fixture/service","running\n");text("/fixture/key","0");text("/fixture/state/enabled","natartos-boot-v1\n");
     text("/fixture/mode","healthy");text("/fixture/enforce","0");text("/fixture/normal","abc");text("/fixture/natartos_loader.so","loader");
     text("/fixture/enabled/hook_overlay.so","");chmod("/fixture/enabled/hook_overlay.so",0600);
@@ -86,14 +86,18 @@ int main(int argc,char **argv){
     reset();uint32_t legacy=5;put("/fixture/legacy.count",&legacy,sizeof(legacy));skipped();
     reset();text("/fixture/enforce","1");skipped();
     failed_ui("crash");failed_ui("hang");failed_ui("badnonce");failed_ui("eof");
-    reset();text("/fixture/manual.pid","4194304\n");chmod("/fixture/manual.pid",0666);ignored_chld=1;
+    reset();text("/fixture/flood","");skipped();
+    reset();text("/fixture/manual.pid","4194304\n");chmod("/fixture/manual.pid",0666);text("/fixture/mode","ignoreterm");ignored_chld=1;
     pid_t p=spawn();wait_for("/fixture/state/state","healthy");assert(starts()==1);ignored_chld=0;
     /* Duplicate supervisor cannot stop or replace the live session. */
     int status=finish(spawn());assert(WIFEXITED(status)&&WEXITSTATUS(status));assert(starts()==1);checks++;
     text("/fixture/state/disabled","");status=finish(p);assert(WIFEXITED(status));assert(contains("/fixture/service","running"));checks++;
     unlink("/fixture/state/disabled");unsigned before=starts();status=finish(spawn());assert(starts()==before);checks++;
-    reset();p=spawn();wait_for("/fixture/state/state","healthy");kill(p,SIGKILL);status=finish(p);assert(WIFSIGNALED(status));wait_for("/fixture/service","running");wait_for("/fixture/state/state","failed");checks++;
-    /* A pending record from a killed attempt blocks another run in the same boot. */
-    before=starts();status=finish(spawn());assert(starts()==before);checks++;
+    for(unsigned repeat=0;repeat<5;repeat++){
+        reset();p=spawn();wait_for("/fixture/state/state","healthy");kill(p,SIGKILL);status=finish(p);assert(WIFSIGNALED(status));wait_for("/fixture/service","running");wait_for("/fixture/state/state","failed");
+        /* A killed attempt blocks another run in the same boot. */
+        before=starts();status=finish(spawn());assert(starts()==before);
+    }
+    checks+=2;
     printf("BOOT_SUPERVISOR_TESTS_PASSED=%u\n",checks);return 0;
 }

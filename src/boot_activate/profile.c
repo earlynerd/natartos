@@ -80,8 +80,14 @@ int boot_profile_parse(const char *text, size_t size, struct boot_profile *out) 
 int boot_profile_load(const char *path, struct boot_profile *out) {
     int fd=boot_trusted_file(path,O_RDONLY); char text[1024];
     if (fd<0) return fail("profile unavailable/untrusted");
-    ssize_t n=read(fd,text,sizeof(text)); close(fd);
-    return n>0 && !boot_profile_parse(text,(size_t)n,out) ? 0 : fail("invalid profile");
+    size_t used=0;ssize_t n=0;
+    while(used<sizeof(text)){
+        n=read(fd,text+used,sizeof(text)-used);
+        if(n<0&&errno==EINTR)continue;
+        if(n<=0)break;used+=(size_t)n;
+    }
+    close(fd);
+    return n>=0 && used<sizeof(text) && !boot_profile_parse(text,used,out) ? 0 : fail("invalid profile");
 }
 
 /* SHA-256, streaming full-image digest. All arithmetic is unsigned 32-bit. */

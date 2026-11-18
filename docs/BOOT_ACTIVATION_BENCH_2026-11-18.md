@@ -51,6 +51,9 @@ mode `0700`, with protected `system_data_file` files.
 | Optional forwarding proxy | `2c863c27c5d88ea98be0fe6250f4e0d76cd52d2f1aad2e1bcc0b4a480a40399f` |
 | Write-disabled qualifier | `8bc3213c797b075bf9c266d0a088680f320b3bacd96f9521ea66565658c0f554` |
 
+These warm artifacts correspond to source checkpoint `80993d9`; later offline
+changes below were not deployed in this test.
+
 The qualifier passed first in a root-shell session. A temporary software disabled
 flag then caused a successful bypass. After the controlled GPS-library swap and
 `dji_sys` restart, the proxy forwarded the stock getter and handed off to the
@@ -70,6 +73,22 @@ Read-only mounts were checked again. After refreshing the existing injector,
 menu open/navigation/BACK and the normal HUD were verified again. No active boot
 hook was left by this warm test. A detached current-boot restoration timer had
 also been armed; it is not protection across a power cycle.
+
+## Subsequent offline review
+
+Command-output limits and child/watcher waits were tightened, and GUI process
+groups are now signalled while their leader's PID remains reserved with
+`WNOWAIT`. The watcher also retries a briefly held lease after pipe EOF: ARM64
+emulation exposed a race where stock restoration succeeded but the failed-attempt
+record was missed during parent cleanup. The helper now allows a bounded lease
+release interval before recording failure. Profiles are read through EOF, and
+the raw handoff preserves redirected standard descriptors across exec.
+
+Both architectures passed the updated 25 supervision/qualification scenarios
+and seven handoff scenarios, plus the profile matrix. This includes excessive
+command output, a GUI ignoring TERM, and five successive supervisor-kill/recovery
+cycles. Android proxy/handoff/loader-message checks passed after the handoff
+change. The hardware remains on the restored original GPS library.
 
 The fixtures do not load a device SELinux policy, execute real GPS callbacks,
 run the DJI GUI or establish a usable device recovery procedure. Full activation,

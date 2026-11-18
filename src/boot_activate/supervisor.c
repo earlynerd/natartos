@@ -128,28 +128,43 @@ static int legacy_safe_mode(void){
     uint32_t count=(uint32_t)b[0]|(uint32_t)b[1]<<8|(uint32_t)b[2]<<16|(uint32_t)b[3]<<24;
     return count>=5;
 }
+static int wait_owned(pid_t pid,int *status,unsigned timeout){
+    uint64_t end=now_ms()+timeout;
+    do{pid_t r=waitpid(pid,status,WNOHANG);if(r==pid)return 0;if(r<0&&errno!=EINTR)return -1;pause_ms(10);}while(now_ms()<end);
+    return -1;
+}
+static int observe_child(pid_t pid){
+    siginfo_t info;memset(&info,0,sizeof(info));
+    if(waitid(P_PID,(id_t)pid,&info,WEXITED|WNOHANG|WNOWAIT))return -1;
+    return info.si_pid==pid?1:0;
+}
+static int command_drain(int fd,char *output,size_t capacity,size_t *used,size_t *seen){
+    char buf[256];ssize_t n;
+    while((n=read(fd,buf,sizeof(buf)))>0){
+        *seen+=(size_t)n;if(*seen>4096)return -1;
+        if(output){if(*used+(size_t)n>=capacity)return -1;memcpy(output+*used,buf,(size_t)n);*used+=(size_t)n;}
+    }
+    return n<0&&errno!=EAGAIN&&errno!=EINTR?-1:0;
+}
 static int run_command(const char *path,const char *a,const char *b,char *output,size_t capacity){
     int fds[2];if(pipe2(fds,O_CLOEXEC|O_NONBLOCK))return -1;
-    pid_t pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return -1;}
+    pid_t parent=getpid(),pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return -1;}
     if(!pid){
-        prctl(PR_SET_PDEATHSIG,SIGKILL);if(getppid()==1)_exit(126);
+        if(prctl(PR_SET_PDEATHSIG,SIGKILL)||getppid()!=parent)_exit(126);
         dup2(fds[1],1);int null=open("/dev/null",O_RDWR);if(null>=0){dup2(null,0);dup2(null,2);}
         char *const args[]={(char *)path,(char *)a,(char *)b,NULL};
         char *const env[]={"PATH=/system/bin:/vendor/bin:/bin",NULL};execve(path,args,env);_exit(127);
     }
-    close(fds[1]);int status=0,finished=0;size_t used=0;uint64_t deadline=now_ms()+3000;
+    close(fds[1]);int status=0,finished=0,bad=0,owned=1;size_t used=0,seen=0;uint64_t deadline=now_ms()+3000;
     while(now_ms()<deadline){
-        char buf[256];ssize_t n;
-        while((n=read(fds[0],buf,sizeof(buf)))>0){if(output&&used+(size_t)n<capacity){memcpy(output+used,buf,(size_t)n);used+=(size_t)n;}else if(output){kill(pid,SIGKILL);}}
-        pid_t r=waitpid(pid,&status,WNOHANG);if(r==pid){finished=1;break;}if(r<0&&errno!=EINTR)break;pause_ms(10);
+        if(command_drain(fds[0],output,capacity,&used,&seen)){bad=1;kill(pid,SIGKILL);}
+        pid_t r=waitpid(pid,&status,WNOHANG);if(r==pid){finished=1;owned=0;break;}
+        if(r<0&&errno!=EINTR){owned=0;break;}pause_ms(10);
     }
-    if(finished&&output){
-        char buf[256];ssize_t n;
-        while((n=read(fds[0],buf,sizeof(buf)))>0){if(used+(size_t)n>=capacity){finished=0;break;}memcpy(output+used,buf,(size_t)n);used+=(size_t)n;}
-    }
+    if(finished&&command_drain(fds[0],output,capacity,&used,&seen))bad=1;
     close(fds[0]);if(output&&capacity)output[used]=0;
-    if(!finished){kill(pid,SIGKILL);while(waitpid(pid,&status,0)<0&&errno==EINTR){}return -1;}
-    return WIFEXITED(status)&&!WEXITSTATUS(status)?0:-1;
+    if(!finished){if(owned){kill(pid,SIGKILL);(void)wait_owned(pid,&status,500);}return -1;}
+    return !bad&&WIFEXITED(status)&&!WEXITSTATUS(status)?0:-1;
 }
 static int service_wait(const char *state){
     uint64_t deadline=now_ms()+STOP_MS;
@@ -166,8 +181,8 @@ static pid_t watcher_start(int *writer){
     int fds[2];if(pipe2(fds,O_CLOEXEC))return -1;
     pid_t pid=fork();if(pid<0){close(fds[0]);close(fds[1]);return -1;}
     if(!pid){
-        close(fds[1]);setsid();signal(SIGTERM,SIG_IGN);signal(SIGINT,SIG_IGN);
-        if(close_other_fds(fds[0]))_exit(1);logfd=-1;
+        close(fds[1]);if(setsid()<0)_exit(1);signal(SIGTERM,SIG_IGN);signal(SIGINT,SIG_IGN);
+        if(close_other_fds(fds[0]))_exit(1);logfd=boot_trusted_file(STATE_DIR "/boot.log",O_WRONLY|O_APPEND);
         int armed=0;char c;ssize_t n;
         while((n=read(fds[0],&c,1))!=0){if(n<0){if(errno==EINTR)continue;_exit(1);}if(c=='A')armed=1;}
         close(fds[0]);stopping=0;
@@ -204,8 +219,19 @@ static void watcher_mark_failure(void){
     /* A dead supervisor has released its lease. A normal live supervisor has
      * already saved failure and still owns it; do not compete with that owner. */
     dirfd_=trusted_dir(STATE_DIR);int fd=boot_trusted_file(STATE_DIR "/lease",O_RDWR);
-    if(dirfd_>=0&&fd>=0&&!flock(fd,LOCK_EX|LOCK_NB)){
-        struct state s;if(!state_read(&s)&&s.boot[0]){if(!s.failures)s.failures=1;strcpy(s.phase,"failed");(void)state_write(&s);}
+    if(dirfd_>=0&&fd>=0){
+        uint64_t end=now_ms()+500;
+        do{
+            if(!flock(fd,LOCK_EX|LOCK_NB)){
+                struct state s;if(!state_read(&s)&&s.boot[0]){if(!s.failures)s.failures=1;strcpy(s.phase,"failed");(void)state_write(&s);}
+                break;
+            }
+            if(errno!=EAGAIN&&errno!=EWOULDBLOCK)break;
+            /* Pipe EOF can precede deferred release of the parent's lease.
+             * A normal live parent has already persisted its failure. */
+            struct state current;if(!state_read(&current)&&current.failures&&!strcmp(current.phase,"failed"))break;
+            pause_ms(10);
+        }while(now_ms()<end);
     }
     if(fd>=0)close(fd);if(dirfd_>=0)close(dirfd_);dirfd_=-1;
 }
@@ -239,10 +265,12 @@ static int install_preload(char preload[4096]){
     if(fgetc(manifest)!=EOF||ferror(manifest))goto done;rc=0;
 done:fclose(manifest);return rc;
 }
-static void stop_gui(pid_t pid){
-    if(pid<=1)return;kill(-pid,SIGTERM);uint64_t deadline=now_ms()+1000;int status;
-    while(now_ms()<deadline){pid_t n=waitpid(pid,&status,WNOHANG);if(n==pid||n<0)break;pause_ms(20);}
-    kill(-pid,SIGKILL);while(waitpid(pid,&status,0)<0&&errno==EINTR){}
+static int stop_gui(pid_t pid){
+    if(pid<=1)return 0;if(observe_child(pid)<0)return -1;
+    kill(-pid,SIGTERM);uint64_t deadline=now_ms()+1000;int status;
+    while(now_ms()<deadline){int exited=observe_child(pid);if(exited<0)return -1;if(exited)break;pause_ms(20);}
+    /* WNOWAIT keeps the child PID reserved until the final group signal. */
+    kill(-pid,SIGKILL);return wait_owned(pid,&status,1000);
 }
 static int gui_session(const char *preload,int watchfd,pid_t watcher,struct state *s){
     int pipes[2];if(pipe2(pipes,O_CLOEXEC|O_NONBLOCK))return -1;
@@ -250,7 +278,7 @@ static int gui_session(const char *preload,int watchfd,pid_t watcher,struct stat
     char ld[4120],nonce_env[64];snprintf(ld,sizeof(ld),"LD_PRELOAD=%s",preload);snprintf(nonce_env,sizeof(nonce_env),"NATARTOS_BOOT_HEALTH_NONCE=%016" PRIx64,nonce);
     pid_t parent=getpid(),pid=fork();
     if(!pid){
-        setpgid(0,0);prctl(PR_SET_PDEATHSIG,SIGKILL);if(getppid()!=parent)_exit(126);
+        if(setpgid(0,0)||prctl(PR_SET_PDEATHSIG,SIGKILL)||getppid()!=parent)_exit(126);
         if(bypass())_exit(126);signal(SIGPIPE,SIG_DFL);
         close(watchfd);close(pipes[0]);if(dup2(pipes[1],198)<0)_exit(126);if(pipes[1]!=198)close(pipes[1]);fcntl(198,F_SETFD,0);
         char *const args[]={GUI,"-g","-f",NULL};
@@ -262,10 +290,8 @@ static int gui_session(const char *preload,int watchfd,pid_t watcher,struct stat
     struct boot_health_message message;size_t used=0;int healthy=0,result=-1;
     for(;;){
         if(bypass()||waitpid(watcher,NULL,WNOHANG)!=0){note("boot: bypass or watcher lost");break;}
-        int status;pid_t r=waitpid(pid,&status,WNOHANG);
-        if(r==pid){
-            note("boot: GUI exited");kill(-pid,SIGKILL);result=1;pid=-1;break;
-        }if(r<0){note("boot: GUI wait failed");break;}
+        int exited=observe_child(pid);
+        if(exited){if(exited>0){note("boot: GUI exited");result=1;}else note("boot: GUI wait failed");break;}
         if(!healthy){
             ssize_t n=read(pipes[0],(char *)&message+used,sizeof(message)-used);
             if(n>0)used+=(size_t)n;
@@ -279,7 +305,7 @@ static int gui_session(const char *preload,int watchfd,pid_t watcher,struct stat
         }
         pause_ms(20);
     }
-    close(pipes[0]);stop_gui(pid);return result;
+    close(pipes[0]);if(stop_gui(pid)){note("boot: GUI termination unconfirmed");result=-1;}return result;
 }
 
 int main(int argc,char **argv){
@@ -320,7 +346,7 @@ int main(int argc,char **argv){
     if(bypass()||install_preload(preload))return 1;
     int writer;pid_t watcher=watcher_start(&writer);if(watcher<0)return 1;
     /* Arm before stopping stock so a killed supervisor cannot strand that step. */
-    if(write(writer,"A",1)!=1){close(writer);waitpid(watcher,NULL,0);return 1;}
+    if(write(writer,"A",1)!=1){close(writer);int status;(void)wait_owned(watcher,&status,1000);return 1;}
     int result=-1;
     if(!run_command(SETPROP,"dji.glasses_service","0",NULL,0)&&!service_wait("stopped")){
         uint64_t window=now_ms();unsigned attempts=0;
@@ -338,7 +364,8 @@ int main(int argc,char **argv){
         }
     }else note("boot: stock service stop unconfirmed");
     strcpy(s.phase,"failed");if(!s.failures)s.failures=1;(void)state_write(&s);
-    close(writer);int status;pid_t r;do{r=waitpid(watcher,&status,0);}while(r<0&&errno==EINTR);
+    close(writer);int status=0;int r=wait_owned(watcher,&status,2*STOP_MS+16000);
+    if(r<0){if(observe_child(watcher)>=0){kill(watcher,SIGKILL);(void)wait_owned(watcher,&status,500);}}
     if(r<0||!WIFEXITED(status)||WEXITSTATUS(status)){stopping=0;stock_restore();}
     note("boot: session ended; permissive state, if entered, lasts until reboot");return 1;
 #endif
