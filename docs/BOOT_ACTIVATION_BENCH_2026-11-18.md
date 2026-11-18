@@ -192,3 +192,22 @@ passed. These fixtures still do not establish actual Bionic thread behavior.
 The next checkpoint is the actual guarded enforcing-to-permissive transition
 and automatic modified-GUI startup after a fresh power cycle. The warm result
 alone does not validate that transition or GPS operation.
+
+## First full cold-test handoff: installation timer expired
+
+The next reported power cycle did not exercise activation. Its fresh boot ID
+was accompanied by stock GPS hashes, an absent enabled flag, the previous boot's
+unchanged state, no fresh proxy marker and no activation attempt. The saved
+current-boot installation timer recorded `RESTORE_DONE`: it restored stock GPS
+and removed the opt-in before that power cycle. This is a bench handoff error,
+not evidence for or against enforcing activation. The owner's display was normal.
+
+For the repeated handoff, the installation timer is explicitly cancellable and
+its cancellation must be confirmed before USB is released. No deadline is placed
+on the owner's reboot step. The artifact set remains the successful warm set.
+
+The repeated re-arm reached healthy state through the real proxy handoff in the
+already-permissive session. A host-script GUI-shutdown race was corrected with
+a bounded exit wait and unconditional stock-GUI restart on its error path. Both
+installation timers recorded `CANCELLED` before the repeated owner handoff.
+The actual enforcing-to-permissive cold transition remains the next checkpoint.
