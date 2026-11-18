@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-only
- * Android-linker fixture with authored synchronous pthread/getenv stand-ins.
+ * Android-linker fixture with authored synchronous pthread and unavailable getenv.
  * Exercises the production loader and pipe ABI, not Bionic thread behavior.
  */
 #include <stddef.h>
@@ -8,10 +8,7 @@
 #include "../boot_probe/raw_syscall.h"
 extern void *dlopen(const char *,int);
 extern char *dlerror(void);
-char *getenv(const char *name){
-    const char *keys[]={"NATARTOS_BOOT_HEALTH_FD","NATARTOS_BOOT_HEALTH_NONCE"};
-    for(unsigned k=0;k<2;k++){unsigned i=0;while(keys[k][i]&&keys[k][i]==name[i])i++;if(!keys[k][i]&&!name[i])return k?"1234567890abcdef":"198";}return NULL;
-}
+char *getenv(const char *name){(void)name;return NULL;}
 int pthread_create(void *thread,const void *attr,void *(*function)(void *),void *arg){(void)thread;(void)attr;function(arg);return 0;}
 __attribute__((noreturn)) static void finish(int result){
     const char *s=result?"ANDROID_BOOT_LOADER=FAIL\n":"ANDROID_BOOT_LOADER=PASS\n";size_t n=0;while(s[n])n++;

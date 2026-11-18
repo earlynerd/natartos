@@ -46,7 +46,7 @@ ulimit -c 0
 gps=$?
 sleep 1
 if [ "$(cat /trigger/result 2>/dev/null)" = ok ]; then echo ANDROID_BOOT_HANDOFF=PASS; fi
-/system/bin/dji_glasses
+NATARTOS_BOOT_HEALTH_FD=198 NATARTOS_BOOT_HEALTH_NONCE=1234567890abcdef /system/bin/dji_glasses
 loader=$?
 echo ANDROID_BOOT_GPS_EXIT=$gps
 echo ANDROID_BOOT_LOADER_EXIT=$loader

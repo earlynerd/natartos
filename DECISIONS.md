@@ -44,3 +44,14 @@ Newer applicable entries supersede older decisions.
 - **Supersedes:** the input-based bypass in the initial boot activation design.
 - **Affects:** `src/boot_activate/supervisor.c`, its build audit/tests and the
   bypass contract in `docs/BOOT_ACTIVATION.md`.
+
+## 2026-11-18 — Make boot health independent of libc environment availability
+
+- **Decision:** preserve the fixed stock Android GUI environment and allow the
+  freestanding loader to read its initial health fields directly from procfs
+  when libc lookup supplies neither. Bound the read and reject malformed input.
+  A successful complete pipe report is required before marking boot health.
+- **Why:** a real warm test reached the overlay hook but selected manual health
+  behavior because libc lookup did not expose the boot fields.
+- **Affects:** loader health setup/reporting, GUI exec environment and the
+  Android-linker fixture. The render criterion and 30-second deadline stay fixed.

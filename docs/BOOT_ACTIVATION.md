@@ -5,7 +5,8 @@ The default marker build still has no activation behavior. These optional
 artifacts are outside release packaging and installation flows.
 
 The implementation has passed authored Linux fixtures and Android-linker
-checks. Automatic activation on goggles is **not yet validated**. See the
+checks. A controlled permissive warm launch and killed-supervisor stock fallback have
+passed on goggles. Enforcing cold activation is **not yet validated**. See the
 [dated bench record](BOOT_ACTIVATION_BENCH_2026-11-18.md) for the exact stage.
 
 ## Components
@@ -124,7 +125,11 @@ executes a new GUI with the loader and complete enabled preload list. Startup
 requires a 24-byte message containing a per-launch nonce and the child PID.
 The loader sends it only after the existing overlay frame-hook signal becomes
 positive. Boot mode never resets health solely because a process remains alive.
-The legacy manual-injection health path remains unchanged.
+The GUI receives the fixed standard Android environment observed on the stock
+service. If libc environment lookup is unavailable, the loader reads a bounded
+initial environment from `/proc/self/environ`, rejecting malformed or duplicate
+health fields. It records health only after a complete pipe write. The legacy
+manual-injection health path remains unchanged.
 
 The overlay signal proves its frame-hook code ran; it does **not** prove a
 visible, correct image, functioning controls or continued rendering. Human/UI
@@ -165,8 +170,9 @@ The Linux guests have no disks, network or USB. Fixtures cover SHA-256 vectors,
 profile and state rejection, exact byte-write boundaries, bypasses, health
 messages, retries, duplicate instances, supervisor death and raw handoff.
 The optional Android test uses privately supplied linker64/libdl with authored
-GPS/overlay fixtures. Its pthread/getenv stand-ins exercise the production
-loader's linking and health protocol, not actual Bionic thread behavior. No
+GPS/overlay fixtures. Its synchronous pthread stand-in and deliberately unavailable getenv exercise
+the production loader's linking, initial-environment fallback and health protocol,
+not actual Bionic thread behavior. No
 captured firmware is redistributed.
 
 Hardware installation is a separate reviewed bench operation. First qualify

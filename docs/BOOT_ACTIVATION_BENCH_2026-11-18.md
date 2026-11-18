@@ -1,7 +1,8 @@
 # Boot activation development bench — 2026-11-18
 
-Status: isolated tests and write-disabled enforcing cold qualification passed.
-Automatic activation on hardware remains unvalidated. This follows
+Status: isolated tests, write-disabled enforcing cold qualification, controlled
+permissive warm activation and killed-supervisor stock fallback passed.
+Enforcing cold activation remains unvalidated. This follows
 the [cold marker bench](BOOT_MARKER_BENCH_2026-11-17.md).
 
 ## Read-only live preflight
@@ -149,3 +150,45 @@ its real-device fallback, visible display/controls and flight operation still
 need separate bench evidence. The next hardware checkpoint is controlled
 activation using the qualified profile, including an actual overlay health
 acknowledgement and stock fallback, before an unattended activation cold boot.
+
+## Full warm activation and real stock fallback
+
+A controlled `--session` test installed the full supervisor, health-reporting
+loader and a manifest for the existing seven enabled mods. It required the
+already-permissive state, so no permission-memory write occurred. The original
+GPS library stayed in place throughout warm testing. Installation directories
+and enabled markers were protected against group/world writes; original content
+and metadata were backed up. Current-boot emergency timers restored the stock
+loader and original metadata between the first two failed attempts.
+
+The first warm attempt loaded the overlay and reached its frame hook, but the
+supervisor timed out without its health packet and restored the stock init GUI.
+Matching the stock GUI's fixed Android environment did not fix that failure.
+Added diagnostics showed `boot health: mode=0`: libc environment lookup did not
+expose the health settings, and the loader had selected its manual health path.
+The exact reason for unavailable libc lookup was not established.
+
+The corrected loader falls back to a bounded read of the initial environment
+from `/proc/self/environ`. With the same acknowledgement requirement it logged
+`boot health: mode=1` and `boot health: report bytes=24`; the supervisor recorded
+`healthy` with zero failed boots. The GUI mapped the intended loader and overlay.
+Menu open, navigation and BACK-to-HUD responses were captured at 92% battery.
+Deliberately killing the supervisor then caused the independent watcher to
+restore the stock init GUI; its maps contained neither loader nor mod preloads.
+Both system and vendor mounts remained read-only. The warm timeout was cancelled.
+
+| Successful warm artifact | SHA-256 |
+| --- | --- |
+| Full supervisor | `7fdc5fdf3e4b9cd98e49497d7f0377b3680218d3cdd8102c1885162e2234b7b6` |
+| Health-reporting loader | `b01b05253d167395f0571660b22e88392a65552c8e8d15b322956839926c573f` |
+| Matching activation proxy, staged for cold test | `64766260b132c66bfabacede76e7829a74d2c2b4ccafac9484ecf68ad96ef490` |
+
+Both Linux architectures passed the profile matrix, 25 supervision/qualification
+and seven handoff scenarios after the fix. The fake GUI now exercises unavailable
+getenv, and the Android-linker fixture supplies real initial environment fields
+while its getenv stand-in returns null. The Android production-loader pipe check
+passed. These fixtures still do not establish actual Bionic thread behavior.
+
+The next checkpoint is the actual guarded enforcing-to-permissive transition
+and automatic modified-GUI startup after a fresh power cycle. The warm result
+alone does not validate that transition or GPS operation.

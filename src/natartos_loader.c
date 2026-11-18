@@ -241,6 +241,7 @@ static int resolve_symbols(void) {
 }
 
 /* ── Health thread ── */
+static void int_to_str(int v, char *out);
 
 static void *health_thread_fn(void *arg) {
     (void)arg;
@@ -249,14 +250,19 @@ static void *health_thread_fn(void *arg) {
         for (int i = 0; i < HEALTH_DELAY_SEC; ++i) {
             sys_nanosleep(&tick, 0);
             if (g_health_signal_ptr && *g_health_signal_ptr > 0) {
-                boot_health_finish(1);
-                write_bootcount(0);
-                write_status("healthy");
+                long sent=boot_health_finish(1);
+                log_open();char report[16];int_to_str((int)sent,report);
+                log_line2("boot health: report bytes=",report);
+                if(sent==(long)sizeof(struct boot_health_message)) {
+                    write_bootcount(0);write_status("healthy");
+                } else write_status("error-boot-report");
+                log_close();
                 return 0;
             }
         }
         boot_health_finish(0);
         write_status("unhealthy-render");
+        log_open();log_line("boot health: no frame signal");log_close();
         return 0;
     }
     struct timespec_t ts = { HEALTH_DELAY_SEC, 0 };
@@ -462,6 +468,8 @@ static void natartos_init(void) {
 
     typedef char *(*getenv_fn)(const char *);
     g_boot_health_mode = boot_health_setup((getenv_fn)dlsym(RTLD_DEFAULT, "getenv"));
+    char health_mode[16];int_to_str(g_boot_health_mode,health_mode);
+    log_line2("boot health: mode=",health_mode);
     if (g_boot_health_mode < 0) {
         write_status("error-boot-health");
         log_line("FAIL: invalid boot health channel");

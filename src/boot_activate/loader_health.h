@@ -7,9 +7,37 @@
 #include "../boot_probe/raw_syscall.h"
 static int boot_health_fd=-1;
 static uint64_t boot_health_nonce;
+/* A freestanding preload can run without a usable libc getenv. The kernel's
+ * initial environment is available independently of libc initialization. */
+static int boot_health_initial_env(char *buffer,unsigned capacity,const char **fdtext,const char **nonce) {
+    long file=raw_open("/proc/self/environ",02000000);if(file<0)return -1;
+    unsigned used=0;int result=-1;
+    for(;;){
+        if(used==capacity)break;
+        long n=raw_call(NR_read,file,(long)(buffer+used),capacity-used,0,0);
+        if(n==-4)continue;
+        if(n<0)break;
+        if(!n){result=0;break;}
+        used+=(unsigned)n;
+    }
+    raw_close(file);if(result|| (used&&buffer[used-1]))return -1;
+    const char *keys[]={"NATARTOS_BOOT_HEALTH_FD=","NATARTOS_BOOT_HEALTH_NONCE="};
+    const char **values[]={fdtext,nonce};
+    for(unsigned start=0;start<used;){
+        unsigned end=start;while(end<used&&buffer[end])end++;
+        for(unsigned k=0;k<2;k++){
+            unsigned i=0;while(keys[k][i]&&start+i<end&&keys[k][i]==buffer[start+i])i++;
+            if(!keys[k][i]){if(*values[k])return -1;*values[k]=buffer+start+i;}
+        }
+        start=end+1;
+    }
+    return 0;
+}
 static int boot_health_setup(char *(*getenv_fn)(const char *)) {
-    if(!getenv_fn)return 0;
-    const char *fdtext=getenv_fn("NATARTOS_BOOT_HEALTH_FD"),*nonce=getenv_fn("NATARTOS_BOOT_HEALTH_NONCE");
+    const char *fdtext=getenv_fn?getenv_fn("NATARTOS_BOOT_HEALTH_FD"):0;
+    const char *nonce=getenv_fn?getenv_fn("NATARTOS_BOOT_HEALTH_NONCE"):0;
+    char initial[8192];
+    if(!fdtext&&!nonce&&boot_health_initial_env(initial,sizeof(initial),&fdtext,&nonce))return -1;
     if(!fdtext&&!nonce)return 0;
     if(!fdtext||!nonce)return -1;
     unsigned fd=0,count=0;uint64_t value=0;
@@ -31,12 +59,13 @@ static int boot_health_setup(char *(*getenv_fn)(const char *)) {
     if(raw_call(NR_fcntl,fd,2 /* F_SETFD */,1,0,0)<0||raw_call(NR_fcntl,fd,4 /* F_SETFL */,flags|04000,0,0)<0)return -1;
     boot_health_fd=(int)fd;boot_health_nonce=value;return 1;
 }
-static void boot_health_finish(int rendered) {
-    if(boot_health_fd<0)return;
+static long boot_health_finish(int rendered) {
+    if(boot_health_fd<0)return -1;
+    long result=0;
     if(rendered){
         struct boot_health_message m={BOOT_HEALTH_MAGIC,boot_health_nonce,(uint32_t)raw_call(NR_getpid,0,0,0,0,0),1};
-        (void)raw_call(NR_write,boot_health_fd,(long)&m,sizeof(m),0,0);
+        result=raw_call(NR_write,boot_health_fd,(long)&m,sizeof(m),0,0);
     }
-    raw_close(boot_health_fd);boot_health_fd=-1;
+    raw_close(boot_health_fd);boot_health_fd=-1;return result;
 }
 #endif

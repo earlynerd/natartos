@@ -262,7 +262,7 @@ static int stop_gui(pid_t pid){
 }
 static int gui_session(const char *preload,int watchfd,pid_t watcher,struct state *s){
     int pipes[2];if(pipe2(pipes,O_CLOEXEC|O_NONBLOCK))return -1;
-    uint64_t nonce=0;if(getrandom(&nonce,sizeof(nonce),0)!=sizeof(nonce)||!nonce){close(pipes[0]);close(pipes[1]);return -1;}
+    uint64_t nonce=0;if(getrandom(&nonce,sizeof(nonce),GRND_NONBLOCK)!=sizeof(nonce)||!nonce){close(pipes[0]);close(pipes[1]);note("boot: health nonce unavailable");return -1;}
     char ld[4120],nonce_env[64];snprintf(ld,sizeof(ld),"LD_PRELOAD=%s",preload);snprintf(nonce_env,sizeof(nonce_env),"NATARTOS_BOOT_HEALTH_NONCE=%016" PRIx64,nonce);
     pid_t parent=getpid(),pid=fork();
     if(!pid){
@@ -270,7 +270,11 @@ static int gui_session(const char *preload,int watchfd,pid_t watcher,struct stat
         if(bypass())_exit(126);signal(SIGPIPE,SIG_DFL);
         close(watchfd);close(pipes[0]);if(dup2(pipes[1],198)<0)_exit(126);if(pipes[1]!=198)close(pipes[1]);fcntl(198,F_SETFD,0);
         char *const args[]={GUI,"-g","-f",NULL};
-        char *const env[]={"PATH=/system/bin:/vendor/bin:/bin",ld,"NATARTOS_BOOT_HEALTH_FD=198",nonce_env,NULL};
+        char *const env[]={"PATH=/sbin:/system/sbin:/system/bin:/system/xbin",
+            "DOWNLOAD_CACHE=/data/cache","ANDROID_BOOTLOGO=1","ANDROID_ROOT=/system",
+            "ANDROID_ASSETS=/system/app","ANDROID_DATA=/data","ANDROID_STORAGE=/storage",
+            "EXTERNAL_STORAGE=/sdcard","ASEC_MOUNTPOINT=/mnt/asec",
+            ld,"NATARTOS_BOOT_HEALTH_FD=198",nonce_env,NULL};
         execve(GUI,args,env);_exit(127);
     }
     close(pipes[1]);if(pid<0){close(pipes[0]);return -1;}setpgid(pid,pid);
@@ -329,9 +333,13 @@ int main(int argc,char **argv){
     char preload[4096];if(install_preload(preload)){note("boot: installation manifest/modes mismatch");return 1;}
     struct state s;if(state_read(&s)){note("boot: corrupt state; manual reset required");return 1;}
     if(!strcmp(id,s.boot)||s.failures>=3){note("boot: already attempted this boot or failure limit reached");return 0;}
+    note("boot: activation preflight mode=%s boot_id=%s enforcing=%d word=0x%08" PRIx32,session?"session":"boot",id,permission.enforcing,permission.word);
     strcpy(s.boot,id);s.failures++;strcpy(s.phase,"pending");
-    if(bypass()||state_write(&s))return 1;
+    if(bypass())return 1;
+    if(state_write(&s)){note("boot: cannot persist activation attempt");return 1;}
     if(!session&&boot_permission_apply(&profile,bypass)){note("boot: permission preflight/transition failed");return 1;}
+    if(boot_permission_inspect(profile.state_phys,&permission)||permission.enforcing||permission.word!=0x01000000U){note("boot: permissive state unconfirmed before GUI startup");return 1;}
+    note("boot: permission ready mode=%s boot_id=%s enforcing=0 word=0x01000000",session?"session":"boot",id);
     if(bypass()||install_preload(preload))return 1;
     int writer;pid_t watcher=watcher_start(&writer);if(watcher<0)return 1;
     /* Arm before stopping stock so a killed supervisor cannot strand that step. */

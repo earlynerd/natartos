@@ -12,7 +12,7 @@ int main(int argc,char **argv){
     FILE *f=fopen("/fixture/starts","a");if(!f)return 1;fprintf(f,"%ld\n",(long)getpid());fclose(f);
     char mode[32]={0};f=fopen("/fixture/mode","r");if(!f)return 1;fgets(mode,sizeof(mode),f);fclose(f);
     if(!strcmp(mode,"crash"))return 1;
-    int health=boot_health_setup(getenv);if(health!=1)return 2;
+    int health=boot_health_setup(NULL);if(health!=1)return 2;
     if(!strcmp(mode,"healthy")||!strcmp(mode,"ignoreterm"))boot_health_finish(1);
     else if(!strcmp(mode,"badnonce")){boot_health_nonce++;boot_health_finish(1);}
     else if(!strcmp(mode,"eof"))boot_health_finish(0);

@@ -20,3 +20,22 @@
   paths. The corrected read-only helper passed live warm and enforcing cold
   qualification, reading the matching state word with zero memory writes and
   zero UI changes. Stock GPS was restored and the opt-in flag removed afterward.
+
+## 2026-11-18 — Read initial boot health settings without libc availability
+
+- **Observation:** the real GUI loaded the overlay and reached its frame hook,
+  but the supervisor timed out and restored stock; matching stock Android
+  environment values did not resolve it. Diagnostics reported health mode zero.
+- **Root cause:** `src/boot_activate/loader_health.h:11` at `6792ff5` interpreted
+  unavailable libc getenv values as a manual launch. The supervisor's health
+  environment was consequently never used; the precise libc lookup failure
+  was not established.
+- **Fix:** use a bounded raw read of the initial environment when libc provides
+  neither field, reject duplicates/truncation, and reset health only after a
+  complete 24-byte report. Retain diagnostic mode/write results.
+- **Class:** unavailable-runtime-dependency
+- **Recently-touched?** yes
+- **Validation:** real warm session acknowledged the render signal; menu controls
+  responded; deliberately killing the supervisor restored stock without mods.
+  Linux supervision/handoff and Android loader fixtures pass with unavailable
+  getenv. See the dated boot activation bench record.
