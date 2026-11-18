@@ -5,8 +5,10 @@ The default marker build still has no activation behavior. These optional
 artifacts are outside release packaging and installation flows.
 
 The implementation has passed authored Linux fixtures and Android-linker
-checks. A controlled permissive warm launch and killed-supervisor stock fallback have
-passed on goggles. Enforcing cold activation is **not yet validated**. See the
+checks, a real warm launch with killed-supervisor fallback, and an enforcing
+cold permission transition with GUI health acknowledgement. The owner's visible
+menu check before Toolya remains pending; SD discovery and an unplugged USB OTG
+indication also need follow-up. See the
 [dated bench record](BOOT_ACTIVATION_BENCH_2026-11-18.md) for the exact stage.
 
 ## Components

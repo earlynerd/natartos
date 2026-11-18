@@ -1,8 +1,9 @@
 # Boot activation development bench — 2026-11-18
 
-Status: isolated tests, write-disabled enforcing cold qualification, controlled
-permissive warm activation and killed-supervisor stock fallback passed.
-Enforcing cold activation remains unvalidated. This follows
+Status: isolated tests, enforcing qualification, real warm fallback, and the
+guarded enforcing cold permission transition with GUI health acknowledgement
+passed. Visible menu operation before Toolya and USB/SD startup observations
+remain under investigation. This follows
 the [cold marker bench](BOOT_MARKER_BENCH_2026-11-17.md).
 
 ## Read-only live preflight
@@ -211,3 +212,38 @@ already-permissive session. A host-script GUI-shutdown race was corrected with
 a bounded exit wait and unconditional stock-GUI restart on its error path. Both
 installation timers recorded `CANCELLED` before the repeated owner handoff.
 The actual enforcing-to-permissive cold transition remains the next checkpoint.
+
+## Repeated enforcing cold boot: permission transition and GUI health
+
+After the owner power-cycled and used only Toolya Enable ADB and Root for
+inspection, a new boot ID matched a fresh enforcing proxy marker, the full
+supervisor's preflight and its healthy state. The helper recorded an enforcing
+signature before applying the guarded permission transition and confirmed the
+permissive signature afterward. Direct enforcement readback was zero. The
+state had zero failed boots and phase `healthy`. The modified GUI's parent was
+the fixed helper with `--boot` in the expected service context; its maps included
+the pinned loader and overlay. All installed candidate and original-backup
+hashes matched. Current system/vendor mounts were read-only, the enabled flag
+remained present and no manual injector PID file was present.
+
+The loader reported boot health mode one, seven loaded mods and a complete
+24-byte acknowledgement. Menu opening, navigation and BACK-to-HUD were captured
+in this session at 92% battery. The owner reported a normal display. The
+permission transition and frame-hook acknowledgement are established for this
+exact build; they do not establish GPS fixes or flight behavior.
+
+The owner then clarified that More had shown no Natartos entries before using
+Toolya, and that an unplugged boot had displayed USB OTG mode. A timing check
+using the kernel's `AT_CLKTCK=100` placed the supervisor at 14.02 seconds, the
+modified GUI at 32.07 seconds and adbd at 75.86 seconds after boot. This proves
+that this modified GUI process began before ADB, while leaving the timing and
+visibility of the owner's earlier menu check unresolved. A repeated unplugged
+boot with a menu check after 60 seconds is the next direct observation.
+
+The SD module also registered zero app entries at cold initialization: the
+runner reported that it could not find exactly one external FAT/exFAT mount.
+The card was mounted in both the root shell and GUI mount tables by the later
+inspection. This does not by itself establish the cause or prove discovery
+recovered. The same automatic session remains enabled; no runtime or persistent
+USB settings were changed during this investigation. ADB was stopped for the
+owner's unplugged check.
