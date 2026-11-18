@@ -8,6 +8,8 @@
  *        -Wl,-soname,natartos_loader.so -o natartos_loader.so natartos_loader.c
  */
 
+#include "boot_activate/loader_health.h"
+
 /* ── Constants ── */
 
 #define AT_FDCWD      (-100)
@@ -214,6 +216,7 @@ static void write_status(const char *status) {
 /* ── Health signal (set by mods, checked by health thread) ── */
 
 static volatile unsigned int *g_health_signal_ptr = 0;
+static int g_boot_health_mode = 0;
 
 /* ── dlopen / dlsym / pthread via dynamic linker ── */
 
@@ -241,6 +244,21 @@ static int resolve_symbols(void) {
 
 static void *health_thread_fn(void *arg) {
     (void)arg;
+    if (g_boot_health_mode) {
+        struct timespec_t tick = { 1, 0 };
+        for (int i = 0; i < HEALTH_DELAY_SEC; ++i) {
+            sys_nanosleep(&tick, 0);
+            if (g_health_signal_ptr && *g_health_signal_ptr > 0) {
+                boot_health_finish(1);
+                write_bootcount(0);
+                write_status("healthy");
+                return 0;
+            }
+        }
+        boot_health_finish(0);
+        write_status("unhealthy-render");
+        return 0;
+    }
     struct timespec_t ts = { HEALTH_DELAY_SEC, 0 };
     sys_nanosleep(&ts, 0);
 
@@ -438,6 +456,15 @@ static void natartos_init(void) {
     if (resolve_symbols() < 0) {
         log_line("FAIL: cannot resolve dlopen/pthread");
         write_status("error");
+        log_close();
+        return;
+    }
+
+    typedef char *(*getenv_fn)(const char *);
+    g_boot_health_mode = boot_health_setup((getenv_fn)dlsym(RTLD_DEFAULT, "getenv"));
+    if (g_boot_health_mode < 0) {
+        write_status("error-boot-health");
+        log_line("FAIL: invalid boot health channel");
         log_close();
         return;
     }

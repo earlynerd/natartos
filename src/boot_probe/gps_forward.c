@@ -5,6 +5,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "raw_syscall.h"
+#ifdef NATARTOS_BOOT_ACTIVATION
+#include "../boot_activate/trigger.h"
+#endif
 
 #ifdef NATARTOS_BOOT_PROBE_TEST
 #define STOCK_PATH "./stock.so"
@@ -150,4 +153,7 @@ static void boot_probe_init(void) {
         }
     }
     marker(status);
+#ifdef NATARTOS_BOOT_ACTIVATION
+    if (__atomic_load_n(&stock_getter, __ATOMIC_ACQUIRE)) boot_activation_start();
+#endif
 }

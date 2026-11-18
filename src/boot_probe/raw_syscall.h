@@ -6,7 +6,8 @@
 enum { NR_openat = 56, NR_close = 57, NR_read = 63, NR_write = 64,
        NR_flock = 32, NR_getpid = 172, NR_getuid = 174, NR_geteuid = 175,
        NR_getgid = 176, NR_getegid = 177, NR_statx = 291, NR_exit_group = 94,
-       RAW_O_NOFOLLOW = 0100000 };
+       NR_fcntl = 25, NR_clone = 220, NR_execve = 221, NR_wait4 = 260,
+       NR_setsid = 157, NR_dup3 = 24, RAW_O_NOFOLLOW = 0100000 };
 static inline long raw_call(long n, long a, long b, long c, long d, long e) {
     register long x0 __asm__("x0") = a, x1 __asm__("x1") = b;
     register long x2 __asm__("x2") = c, x3 __asm__("x3") = d;
@@ -19,7 +20,8 @@ static inline long raw_call(long n, long a, long b, long c, long d, long e) {
 enum { NR_openat = 257, NR_close = 3, NR_read = 0, NR_write = 1,
        NR_flock = 73, NR_getpid = 39, NR_getuid = 102, NR_geteuid = 107,
        NR_getgid = 104, NR_getegid = 108, NR_statx = 332, NR_exit_group = 231,
-       RAW_O_NOFOLLOW = 0400000 };
+       NR_fcntl = 72, NR_clone = 56, NR_execve = 59, NR_wait4 = 61,
+       NR_setsid = 112, NR_dup3 = 292, RAW_O_NOFOLLOW = 0400000 };
 static inline long raw_call(long n, long a, long b, long c, long d, long e) {
     register long r10 __asm__("r10") = d, r8 __asm__("r8") = e;
     long result;
