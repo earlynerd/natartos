@@ -8,8 +8,9 @@ The implementation has passed authored Linux fixtures and Android-linker
 checks, a real warm launch with killed-supervisor fallback, and an enforcing
 cold permission transition with GUI health acknowledgement. The owner also
 confirmed Natartos menu entries after an unplugged boot without using Toolya.
+The owner subsequently launched Hello, which reported running from the SD card.
 An initial USB OTG banner disappeared at the glasses-application restart; its
-initial cause remains unknown. SD app discovery still needs follow-up. See the
+cause and the earlier boot's empty SD scan remain unexplained. See the
 [dated bench record](BOOT_ACTIVATION_BENCH_2026-11-18.md) for the exact stage.
 
 ## Components

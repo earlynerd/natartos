@@ -3,8 +3,9 @@
 Status: isolated tests, enforcing qualification, real warm fallback, and the
 guarded enforcing cold permission transition with GUI health acknowledgement
 passed. The owner confirmed visible Natartos menus after a separate unplugged
-boot without Toolya. The initial USB OTG banner cleared at the GUI restart;
-its cause and SD app discovery remain unresolved. This follows
+boot without Toolya, followed by a successful Hello launch reporting SD-card
+execution. The initial USB OTG banner cleared at the GUI restart; its cause and
+the earlier boot's empty SD scan remain unexplained. This follows
 the [cold marker bench](BOOT_MARKER_BENCH_2026-11-17.md).
 
 ## Read-only live preflight
@@ -266,3 +267,17 @@ into the owner-confirmed Natartos session. SD application discovery and GPS fix
 behavior remain outside this confirmation. The existing automatic bootstrap is
 left enabled, and host ADB remains stopped. No additional device changes or
 reboots were requested for this confirmation.
+
+## Owner-confirmed Hello launch from SD after automatic startup
+
+Following the unplugged startup confirmation, the owner reported successfully
+launching Hello; the application reported that it was running from the SD card.
+This extends the owner-observed result from visible Natartos menus to a working
+SD application launch after automatic startup. No further code or device changes
+were made between these confirmations.
+
+The earlier instrumented boot's zero-entry scan is retained as a separate
+observation. This successful launch establishes usable SD discovery and execution
+in the owner's reported session; it does not explain the earlier empty scan or
+establish identical discovery timing on every boot. The remaining open evidence
+gaps are that scan's cause, the transient initial OTG indication and GPS fixes.
