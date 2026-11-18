@@ -6,9 +6,10 @@ artifacts are outside release packaging and installation flows.
 
 The implementation has passed authored Linux fixtures and Android-linker
 checks, a real warm launch with killed-supervisor fallback, and an enforcing
-cold permission transition with GUI health acknowledgement. The owner's visible
-menu check before Toolya remains pending; SD discovery and an unplugged USB OTG
-indication also need follow-up. See the
+cold permission transition with GUI health acknowledgement. The owner also
+confirmed Natartos menu entries after an unplugged boot without using Toolya.
+An initial USB OTG banner disappeared at the glasses-application restart; its
+initial cause remains unknown. SD app discovery still needs follow-up. See the
 [dated bench record](BOOT_ACTIVATION_BENCH_2026-11-18.md) for the exact stage.
 
 ## Components

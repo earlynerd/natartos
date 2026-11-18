@@ -1,9 +1,10 @@
-# Boot activation development bench — 2026-11-18
+# Boot activation development bench â€” 2026-11-18
 
 Status: isolated tests, enforcing qualification, real warm fallback, and the
 guarded enforcing cold permission transition with GUI health acknowledgement
-passed. Visible menu operation before Toolya and USB/SD startup observations
-remain under investigation. This follows
+passed. The owner confirmed visible Natartos menus after a separate unplugged
+boot without Toolya. The initial USB OTG banner cleared at the GUI restart;
+its cause and SD app discovery remain unresolved. This follows
 the [cold marker bench](BOOT_MARKER_BENCH_2026-11-17.md).
 
 ## Read-only live preflight
@@ -247,3 +248,21 @@ inspection. This does not by itself establish the cause or prove discovery
 recovered. The same automatic session remains enabled; no runtime or persistent
 USB settings were changed during this investigation. ADB was stopped for the
 owner's unplugged check.
+
+## Owner-confirmed unplugged startup
+
+The owner repeated the power cycle with USB unplugged and checked More before
+using Toolya. They reported an initial USB OTG indication, then a restart of the
+glasses application roughly ten seconds after the initial display. After that
+restart the banner was gone and Natartos menu entries were present. This is an
+owner observation, complementing the preceding instrumented boot's permission,
+process and health evidence. It confirms usable automatic menu startup without
+Toolya or a USB connection. The visible application restart matches the
+supervisor's replacement of the stock GUI; it is not evidence of a second
+whole-device reboot.
+
+The reason for the initial OTG indication is not established. It did not persist
+into the owner-confirmed Natartos session. SD application discovery and GPS fix
+behavior remain outside this confirmation. The existing automatic bootstrap is
+left enabled, and host ADB remains stopped. No additional device changes or
+reboots were requested for this confirmation.
