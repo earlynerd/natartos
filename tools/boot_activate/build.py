@@ -44,6 +44,8 @@ def main():
     for name in names:
         audit[name]=inspect(out/name,args.arch)
         if audit[name]["imports"] or audit[name]["needed"] or audit[name]["interpreter"]:raise ValueError("Expected static native helper")
+    for name in ["boot-supervisor","boot-qualify"]:
+        if b"/dev/input/" in (out/name).read_bytes() or b"gpio_keys" in (out/name).read_bytes():raise ValueError("Boot helper unexpectedly includes input-device access")
     if b"dji.glasses_service" in (out/"boot-qualify").read_bytes():raise ValueError("Qualifier unexpectedly includes UI control")
     if args.arch=="aarch64":
         shared=["-shared","-fPIC","-nostdlib","-ffreestanding","-fno-builtin","-fno-stack-protector","-Wl,-Bsymbolic","-Wl,-z,noexecstack,-z,relro,-z,now"]

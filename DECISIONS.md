@@ -32,3 +32,15 @@ Newer applicable entries supersede older decisions.
 - **Affects:** optional boot artifacts, loader pipe health and
   `docs/BOOT_ACTIVATION.md`. Production profiles and raw device evidence remain
   private; this does not add release installation or firmware flashing.
+
+## 2026-11-18 — Keep boot decisions independent of input devices
+
+- **Decision:** remove button-state checks from qualification and activation.
+  Use the persistent enable/disable files, exact-build checks, attempt limits
+  and automatic stock fallback. The startup delay requires no owner action.
+- **Why:** unattended boot must not depend on a timed key action or input-device
+  access. The first enforcing cold qualification stopped at the input gate
+  before reaching its intended read-only permission probe.
+- **Supersedes:** the input-based bypass in the initial boot activation design.
+- **Affects:** `src/boot_activate/supervisor.c`, its build audit/tests and the
+  bypass contract in `docs/BOOT_ACTIVATION.md`.

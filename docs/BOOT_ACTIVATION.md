@@ -57,11 +57,11 @@ root-owned, without group/world writes or final symlinks. Their ancestor
 directories must be trusted. No production profile is provided.
 
 Either `/data/.natartos_disabled` or the new `disabled` flag skips startup.
-During the ten-second startup window, holding BACK also skips it. The helper
-checks `EVIOCGKEY` on the `gpio_keys` device at event0 without grabbing or
-injecting input. An unavailable/unexpected input device skips startup. Bypass
-checks run again before a permission write. During an active session, either
-software flag requests a return to stock; ordinary BACK navigation is unaffected.
+A ten-second delay lets stock startup settle; the helper continues checking
+those flags throughout it and again before a permission write. Boot decisions
+use persistent configuration and automatic guards. Neither qualification nor
+activation reads input-device state or requires a button action. During an
+active session, either software flag requests a return to stock.
 
 The activation helper also refuses an active/advisory manual injector PID and
 the legacy loader's safe-mode counter. Do not start Toolya's Natartos injector
@@ -140,8 +140,8 @@ Commands, service-state waits and child termination have bounded waits.
 
 The watcher is a best-effort process fallback, not an independent recovery
 system. Killing all participants, power loss, denied property access or a
-broken stock service can defeat it. A held BACK button bypasses activation;
-it does not bypass an invalid GPS forwarding pair. No tested firmware restore
+broken stock service can defeat it. The software disabled flags skip activation;
+they do not bypass an invalid GPS forwarding pair. No tested firmware restore
 or flight-safety claim is made by these fixtures.
 
 ## Build and tests

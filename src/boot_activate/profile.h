@@ -15,6 +15,7 @@ struct permission_check {
 };
 
 int boot_profile_parse(const char *text, size_t size, struct boot_profile *out);
+void boot_profile_set_logger(void (*logger)(const char *));
 int boot_profile_load(const char *path, struct boot_profile *out);
 int boot_profile_identity(const struct boot_profile *profile);
 int boot_permission_check(const struct boot_profile *profile, struct permission_check *out);

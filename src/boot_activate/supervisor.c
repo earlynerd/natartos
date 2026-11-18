@@ -9,7 +9,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <inttypes.h>
-#include <linux/input.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -17,7 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/file.h>
-#include <sys/ioctl.h>
 #include <sys/prctl.h>
 #include <sys/random.h>
 #include <sys/resource.h>
@@ -44,7 +42,7 @@
 #define LEGACY_COUNT BASE "/legacy.count"
 #define BOOT_ROOT BASE
 #define INSTALL_ROOT BASE
-#define GATE_MS 200
+#define STARTUP_DELAY_MS 200
 #define HEALTH_MS 800
 #define STOP_MS 800
 #define RETRY_MS 50
@@ -65,7 +63,7 @@
 #define LEGACY_COUNT "/data/.natartos_bootcount"
 #define BOOT_ROOT "/vendor/lib64/natartos_boot"
 #define INSTALL_ROOT "/vendor/natartos"
-#define GATE_MS 10000
+#define STARTUP_DELAY_MS 10000
 #define HEALTH_MS 30000
 #define STOP_MS 8000
 #define RETRY_MS 2000
@@ -82,6 +80,7 @@ static void note(const char *format,...){
     if(logfd>=0){struct stat st;if(!fstat(logfd,&st)&&st.st_size>=0&&(uint64_t)st.st_size+len<=131072)(void)write(logfd,b,len);}
     (void)write(2,b,len);
 }
+static void profile_error(const char *why){note("boot: %s",why);}
 static int close_other_fds(int keep){
     DIR *d=opendir("/proc/self/fd");if(!d)return -1;int own=dirfd(d);
     struct dirent *ent;
@@ -100,17 +99,6 @@ static int enabled(void){
     char b[32];ssize_t n=read(fd,b,sizeof(b));close(fd);
     return n==17&&!memcmp(b,"natartos-boot-v1\n",17);
 }
-static int key_bypass(void){
-#ifdef NATARTOS_BOOT_TEST
-    char c;int fd=open(BASE "/key",O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return 1;ssize_t n=read(fd,&c,1);close(fd);return n!=1||c!='0';
-#else
-    int fd=open("/dev/input/event0",O_RDONLY|O_NONBLOCK|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return 1;
-    char name[64]={0};unsigned char keys[(KEY_MAX+8)/8]={0};
-    int ok=ioctl(fd,EVIOCGNAME(sizeof(name)),name)>=0&&!strcmp(name,"gpio_keys")&&ioctl(fd,EVIOCGKEY(sizeof(keys)),keys)>=0;
-    close(fd);return !ok||(keys[KEY_BACK/8]&(1U<<(KEY_BACK%8)));
-#endif
-}
-static int activation_cancelled(void){return bypass()||key_bypass();}
 static int manual_session(void){
     if(!present(LEGACY_PID))return 0;
     /* Advisory only: its contents can suppress startup, never authorize an
@@ -320,13 +308,14 @@ int main(int argc,char **argv){
     lease=openat(dirfd_,"lease",O_RDWR|O_CREAT|O_NOFOLLOW|O_CLOEXEC,0600);struct stat st;
     if(lease<0||fstat(lease,&st)||!S_ISREG(st.st_mode)||st.st_uid||(st.st_mode&0022)||flock(lease,LOCK_EX|LOCK_NB))return 1;
     logfd=boot_trusted_file(STATE_DIR "/boot.log",O_WRONLY|O_APPEND);
+    boot_profile_set_logger(profile_error);
 #ifndef NATARTOS_BOOT_TEST
     if(!session){char context[64]={0};int fd=open("/proc/self/attr/current",O_RDONLY|O_CLOEXEC);ssize_t n=fd<0?-1:read(fd,context,sizeof(context)-1);if(fd>=0)close(fd);
         context[strcspn(context,"\r\n")]=0;
         if(n<=0||strcmp(context,"u:r:dji_services:s0")){note("boot: unexpected execution context");return 1;}}
 #endif
-    uint64_t end=now_ms()+GATE_MS;
-    do{if(bypass()||key_bypass()){note("boot: startup bypass");return 0;}pause_ms(50);}while(now_ms()<end);
+    uint64_t end=now_ms()+STARTUP_DELAY_MS;
+    do{if(bypass()){note("boot: startup bypass");return 0;}pause_ms(50);}while(now_ms()<end);
     struct boot_profile profile;struct permission_check permission;
     int rootfd=trusted_dir(BOOT_ROOT);if(rootfd<0){note("boot: untrusted profile directory");return 1;}close(rootfd);
     if(boot_profile_load(PROFILE,&profile)||boot_permission_check(&profile,&permission)){note("boot: permission profile/check failed");return 1;}
@@ -341,8 +330,8 @@ int main(int argc,char **argv){
     struct state s;if(state_read(&s)){note("boot: corrupt state; manual reset required");return 1;}
     if(!strcmp(id,s.boot)||s.failures>=3){note("boot: already attempted this boot or failure limit reached");return 0;}
     strcpy(s.boot,id);s.failures++;strcpy(s.phase,"pending");
-    if(bypass()||key_bypass()||state_write(&s))return 1;
-    if(!session&&boot_permission_apply(&profile,activation_cancelled)){note("boot: permission preflight/transition failed");return 1;}
+    if(bypass()||state_write(&s))return 1;
+    if(!session&&boot_permission_apply(&profile,bypass)){note("boot: permission preflight/transition failed");return 1;}
     if(bypass()||install_preload(preload))return 1;
     int writer;pid_t watcher=watcher_start(&writer);if(watcher<0)return 1;
     /* Arm before stopping stock so a killed supervisor cannot strand that step. */

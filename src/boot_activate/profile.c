@@ -28,7 +28,12 @@
 #define IMAGE2 "/dev/block/by-name/normal_2"
 #endif
 
-static int fail(const char *why) { fprintf(stderr, "boot: %s\n", why); return -1; }
+static void (*error_logger)(const char *);
+void boot_profile_set_logger(void (*logger)(const char *)) { error_logger=logger; }
+static int fail(const char *why) {
+    if(error_logger)error_logger(why);else fprintf(stderr,"boot: %s\n",why);
+    return -1;
+}
 
 int boot_trusted_file(const char *path, int flags) {
     int fd = open(path, flags | O_CLOEXEC | O_NOFOLLOW | O_NONBLOCK);

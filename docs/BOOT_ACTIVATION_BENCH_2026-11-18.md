@@ -90,6 +90,28 @@ command output, a GUI ignoring TERM, and five successive supervisor-kill/recover
 cycles. Android proxy/handoff/loader-message checks passed after the handoff
 change. The hardware remains on the restored original GPS library.
 
+## First enforcing cold qualification and correction
+
+After the owner power-cycled and used Toolya Enable ADB then Root without
+starting Natartos, the GPS proxy produced a fresh `dji_services` marker with
+`enforcing=1`. The owner reported a normal display. The helper logged
+`startup bypass` before reaching its permission probe, so this did **not**
+qualify the memory-read path. The existing log combined input-access failures
+and BACK state; it did not prove that the owner held a button.
+
+The mandatory input gate was removed from qualification and activation.
+Boot decisions now use persistent configuration and automatic checks. Profile
+errors are also preserved in the bounded boot log. Updated tests passed on both
+architectures, and both boot executables are audited for absence of input-device
+paths. See [the debug entry](../DEBUG_LOG.md) and the later decision entry.
+
+The owner started Natartos normally for cleanup. The original GPS pair was
+restored and verified before the corrected read-only helper was installed.
+Its SHA-256 is `2a3ba6283bc7094424426ec4643665462b0367a9593e528cb3aeee56c1247396`.
+It passed a live warm qualification without input-device access. The same
+previously validated forwarding proxy is being used for the repeated cold test;
+the activation-capable helper and new loader are still not installed.
+
 The fixtures do not load a device SELinux policy, execute real GPS callbacks,
 run the DJI GUI or establish a usable device recovery procedure. Full activation,
 its real-device fallback, visible display/controls and flight operation still

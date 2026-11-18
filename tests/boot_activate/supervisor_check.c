@@ -45,7 +45,7 @@ static void manifest(void){
 }
 static void reset(void){
     unlink("/fixture/state/state");unlink("/fixture/state/disabled");unlink("/fixture/disabled");unlink("/fixture/manual.pid");unlink("/fixture/legacy.count");unlink("/fixture/starts");unlink("/fixture/flood");
-    text("/fixture/service","running\n");text("/fixture/key","0");text("/fixture/state/enabled","natartos-boot-v1\n");
+    text("/fixture/service","running\n");text("/fixture/state/boot.log","");text("/fixture/state/enabled","natartos-boot-v1\n");chmod("/fixture/state/enabled",0600);
     text("/fixture/mode","healthy");text("/fixture/enforce","0");text("/fixture/normal","abc");text("/fixture/natartos_loader.so","loader");
     text("/fixture/enabled/hook_overlay.so","");chmod("/fixture/enabled/hook_overlay.so",0600);
     text("/fixture/mods/hook_overlay.so","overlay");chmod("/fixture/mods/hook_overlay.so",0600);manifest();
@@ -75,11 +75,11 @@ int main(int argc,char **argv){
     supervisor=argv[1];
     reset();unlink("/fixture/state/enabled");skipped();
     reset();text("/fixture/disabled","");skipped();
-    reset();text("/fixture/key","1");skipped();
-    reset();unlink("/fixture/key");skipped();
+    reset();text("/fixture/state/disabled","");skipped();
+    reset();chmod("/fixture/state/enabled",0666);skipped();
     reset();text("/fixture/state/state","corrupt\n");skipped();
     reset();text("/fixture/state/state","1 bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb 3 failed\n");skipped();
-    reset();text("/fixture/normal","changed");skipped();
+    reset();text("/fixture/normal","changed");skipped();assert(contains("/fixture/state/boot.log","boot image digest mismatch"));
     reset();text("/fixture/natartos_loader.so","changed");skipped();
     reset();chmod("/fixture/enabled/hook_overlay.so",0666);skipped();
     reset();text("/fixture/manual.pid","1\n");skipped();
