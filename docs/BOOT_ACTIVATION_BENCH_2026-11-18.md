@@ -1,7 +1,7 @@
 # Boot activation development bench — 2026-11-18
 
-Status: isolated tests and write-disabled warm qualification passed. Enforcing
-cold qualification and activation on hardware remain unvalidated. This follows
+Status: isolated tests and write-disabled enforcing cold qualification passed.
+Automatic activation on hardware remains unvalidated. This follows
 the [cold marker bench](BOOT_MARKER_BENCH_2026-11-17.md).
 
 ## Read-only live preflight
@@ -112,9 +112,40 @@ It passed a live warm qualification without input-device access. The same
 previously validated forwarding proxy is being used for the repeated cold test;
 the activation-capable helper and new loader are still not installed.
 
+## Corrected enforcing cold qualification
+
+The owner power-cycled again, reported a normal display, and completed Toolya
+Enable ADB then Root without starting Natartos. A new live boot ID matched both
+the GPS proxy marker and one fresh qualifier record:
+
+```text
+BOOT_QUALIFY_OK mode=boot ... enforcing=1 word=0x01000100 memory_writes=0 ui_changes=0
+```
+
+This confirms that the corrected static helper executed in the required root
+`dji_services` context and passed the exact kernel/slot/full-image checks,
+boot-device size check, read-only physical-memory access, state signature and
+direct enforcement agreement under enforcing policy. No input-device check
+participated. Current `/system` and `/vendor` mounts were read-only. The root
+`su` shell could not discover the service PID with `pidof`; the fresh native
+records and init service property supplied the relevant evidence instead.
+
+The activation-capable helper was not deployed. The permission-byte write,
+automatic modified-GUI startup and real-device failure fallback remain untested.
+This qualification also does not establish GPS position fixes or flight operation.
+
+After evidence collection, the owner started Natartos normally for cleanup.
+The original GPS pair was restored and hash-verified, the qualification enable
+flag removed, the existing installed loader verified unchanged and read-only
+mounts checked again. The new helper/profile remain dormant without an active
+boot hook. Menu open, navigation and BACK response were observed. Capture selects
+the first nonblank buffer and retained a fading-menu frame, so it does not alone
+confirm the current optical HUD. The owner had confirmed normal cold display;
+the final control captures are recorded with the private bench logs.
+
 The fixtures do not load a device SELinux policy, execute real GPS callbacks,
 run the DJI GUI or establish a usable device recovery procedure. Full activation,
 its real-device fallback, visible display/controls and flight operation still
-need separate bench evidence. The next hardware checkpoint is the write-disabled
-qualifier under enforcing policy after a full power cycle; the owner must be
-available for that power cycle and its immediate UI check.
+need separate bench evidence. The next hardware checkpoint is controlled
+activation using the qualified profile, including an actual overlay health
+acknowledgement and stock fallback, before an unattended activation cold boot.

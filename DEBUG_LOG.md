@@ -17,5 +17,6 @@
 - **Recently-touched?** yes
 - **Validation:** 32 supervision/handoff scenarios and the profile matrix passed
   on ARM64 and x86-64. Both boot binaries pass an audit excluding input-device
-  paths. The corrected read-only helper passed a live warm check; enforcing
-  cold qualification is being repeated.
+  paths. The corrected read-only helper passed live warm and enforcing cold
+  qualification, reading the matching state word with zero memory writes and
+  zero UI changes. Stock GPS was restored and the opt-in flag removed afterward.
