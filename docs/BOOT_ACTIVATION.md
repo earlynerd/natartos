@@ -163,7 +163,17 @@ python tools/boot_activate/build.py --zig /path/to/zig-0.15.2 --arch x86_64
 Outputs and source/artifact hashes are under `build/boot-activate/<arch>`.
 Native helpers must have no dynamic imports, dependencies or ELF interpreter.
 The optional ARM64 shared artifacts receive symbol/dependency and stack audits.
-No vendor code is required to build them.
+No vendor code is required to build them. The builder explicitly defines
+`NATARTOS_BOOT_ACTIVATION` for the experimental loader. The default `src/Makefile`
+build excludes boot health entirely; `manual/natartos_loader.so` is also built
+and audited to check that separation. Do not substitute that default loader in
+the supervisor's manifest: it does not send a boot health acknowledgement.
+
+The separate `boot-activation.yml` workflow cross-builds and audits both native
+architectures using checksum-pinned Zig 0.15.2. It requires no firmware, USB or
+production profile. Execution of the VM suites below is separate from those
+CI build checks; optional Android checks require the private inputs described
+below.
 
 ```sh
 python tools/boot_activate/run_vm_tests.py --arch aarch64 --qemu /path/to/qemu-system-aarch64 --kernel /path/to/kernel --initramfs /path/to/initramfs

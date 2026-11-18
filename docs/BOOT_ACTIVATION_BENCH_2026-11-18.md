@@ -281,3 +281,23 @@ observation. This successful launch establishes usable SD discovery and executio
 in the owner's reported session; it does not explain the earlier empty scan or
 establish identical discovery timing on every boot. The remaining open evidence
 gaps are that scan's cause, the transient initial OTG indication and GPS fixes.
+
+## Upstream PR preparation
+
+The optional loader health path is now gated by `NATARTOS_BOOT_ACTIVATION`.
+The experimental builder opts in; the default release build omits it. A
+preprocessor comparison matched the opt-in loader to the bench-tested source
+and the default loader to upstream `master`. All 18 allocated ELF sections
+(excluding note metadata) matched a rebuilt bench-source reference. The full
+shared-file hash changed, so the artifact table above continues to identify
+the actual installed bench binaries, not a new hardware deployment. The
+supervisor and activation-proxy hashes stayed unchanged. No device writes were
+made during PR preparation.
+
+Both architectures passed fresh runs of the 25 supervision/qualification,
+seven handoff and 14 marker scenarios, plus the profile matrix. The optional
+Android proxy/handoff/loader checks passed. A separate workflow now cross-builds
+and audits activation artifacts on both architectures with checksum-pinned Zig;
+its YAML was checked locally. A hosted workflow run still requires publishing
+the branch. Public CI does not require or redistribute private Android inputs,
+production profiles or device captures.

@@ -21,7 +21,7 @@
   qualification, reading the matching state word with zero memory writes and
   zero UI changes. Stock GPS was restored and the opt-in flag removed afterward.
 
-## 2026-11-18 — Read initial boot health settings without libc availability
+## 2026-11-18 â€” Read initial boot health settings without libc availability
 
 - **Observation:** the real GUI loaded the overlay and reached its frame hook,
   but the supervisor timed out and restored stock; matching stock Android

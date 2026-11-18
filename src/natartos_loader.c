@@ -8,7 +8,9 @@
  *        -Wl,-soname,natartos_loader.so -o natartos_loader.so natartos_loader.c
  */
 
+#ifdef NATARTOS_BOOT_ACTIVATION
 #include "boot_activate/loader_health.h"
+#endif
 
 /* ── Constants ── */
 
@@ -216,7 +218,9 @@ static void write_status(const char *status) {
 /* ── Health signal (set by mods, checked by health thread) ── */
 
 static volatile unsigned int *g_health_signal_ptr = 0;
+#ifdef NATARTOS_BOOT_ACTIVATION
 static int g_boot_health_mode = 0;
+#endif
 
 /* ── dlopen / dlsym / pthread via dynamic linker ── */
 
@@ -241,10 +245,13 @@ static int resolve_symbols(void) {
 }
 
 /* ── Health thread ── */
+#ifdef NATARTOS_BOOT_ACTIVATION
 static void int_to_str(int v, char *out);
+#endif
 
 static void *health_thread_fn(void *arg) {
     (void)arg;
+#ifdef NATARTOS_BOOT_ACTIVATION
     if (g_boot_health_mode) {
         struct timespec_t tick = { 1, 0 };
         for (int i = 0; i < HEALTH_DELAY_SEC; ++i) {
@@ -265,6 +272,7 @@ static void *health_thread_fn(void *arg) {
         log_open();log_line("boot health: no frame signal");log_close();
         return 0;
     }
+#endif
     struct timespec_t ts = { HEALTH_DELAY_SEC, 0 };
     sys_nanosleep(&ts, 0);
 
@@ -466,6 +474,7 @@ static void natartos_init(void) {
         return;
     }
 
+#ifdef NATARTOS_BOOT_ACTIVATION
     typedef char *(*getenv_fn)(const char *);
     g_boot_health_mode = boot_health_setup((getenv_fn)dlsym(RTLD_DEFAULT, "getenv"));
     char health_mode[16];int_to_str(g_boot_health_mode,health_mode);
@@ -476,6 +485,7 @@ static void natartos_init(void) {
         log_close();
         return;
     }
+#endif
 
     /* 5b. Pre-load libdl.so globally so mods can resolve dlsym */
     my_dlopen("libdl.so", RTLD_LAZY | RTLD_GLOBAL);

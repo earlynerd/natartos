@@ -45,7 +45,7 @@ Newer applicable entries supersede older decisions.
 - **Affects:** `src/boot_activate/supervisor.c`, its build audit/tests and the
   bypass contract in `docs/BOOT_ACTIVATION.md`.
 
-## 2026-11-18 � Make boot health independent of libc environment availability
+## 2026-11-18 — Make boot health independent of libc environment availability
 
 - **Decision:** preserve the fixed stock Android GUI environment and allow the
   freestanding loader to read its initial health fields directly from procfs
@@ -55,3 +55,13 @@ Newer applicable entries supersede older decisions.
   behavior because libc lookup did not expose the boot fields.
 - **Affects:** loader health setup/reporting, GUI exec environment and the
   Android-linker fixture. The render criterion and 30-second deadline stay fixed.
+
+## 2026-11-18 — Keep boot health out of default release builds
+
+- **Decision:** compile the loader's inherited-pipe health path only with
+  `NATARTOS_BOOT_ACTIVATION`; the experimental builder opts in explicitly and
+  also builds a default loader to audit that separation.
+- **Why:** a default per-session release should retain its existing startup
+  behavior while the boot supervisor remains an experimental contribution.
+- **Affects:** loader build flag, activation cross-build audits, README entry
+  and the separate boot-activation CI workflow. No deployment changes.

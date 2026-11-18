@@ -55,10 +55,16 @@ def main():
         so("link-only/libdl.so",[ROOT/"tools/boot_probe/libdl_import.c"],["-Wl,-soname,libdl.so"])
         so("gps.default.so",[ROOT/"src/boot_probe/gps_forward.c"],["-DNATARTOS_BOOT_ACTIVATION","-fvisibility=hidden","-Wl,-soname,gps.default.so","-Wl,--no-as-needed",str(link/"libdl.so")])
         inspect_proxy(out/"gps.default.so",args.arch)
-        so("natartos_loader.so",[ROOT/"src/natartos_loader.c"],["-fvisibility=hidden","-Wl,-soname,natartos_loader.so","-Wl,--no-as-needed",str(link/"libdl.so")])
+        loader_flags=["-fvisibility=hidden","-Wl,-soname,natartos_loader.so","-Wl,--no-as-needed",str(link/"libdl.so")]
+        so("natartos_loader.so",[ROOT/"src/natartos_loader.c"],["-DNATARTOS_BOOT_ACTIVATION",*loader_flags])
         audit["natartos_loader.so"]=inspect(out/"natartos_loader.so",args.arch)
         if audit["natartos_loader.so"]["imports"]!=["dlsym"] or audit["natartos_loader.so"]["needed"]!=["libdl.so"] or audit["natartos_loader.so"]["exports"]:raise ValueError("Unexpected loader ABI")
-        names += ["gps.default.so","natartos_loader.so"]
+        manual=out/"manual";manual.mkdir(exist_ok=True)
+        so("manual/natartos_loader.so",[ROOT/"src/natartos_loader.c"],loader_flags)
+        audit["manual/natartos_loader.so"]=inspect(manual/"natartos_loader.so",args.arch)
+        if b"NATARTOS_BOOT_HEALTH" in (manual/"natartos_loader.so").read_bytes():raise ValueError("Default loader includes experimental boot health")
+        if audit["manual/natartos_loader.so"]["imports"]!=["dlsym"] or audit["manual/natartos_loader.so"]["needed"]!=["libdl.so"] or audit["manual/natartos_loader.so"]["exports"]:raise ValueError("Unexpected default loader ABI")
+        names += ["gps.default.so","natartos_loader.so","manual/natartos_loader.so"]
     artifacts={n:hashlib.sha256((out/n).read_bytes()).hexdigest() for n in names}
     info={"experimental":True,"device_tested":False,"arch":args.arch,"artifacts":artifacts,"elf":audit,
           "sources":{str(f.relative_to(ROOT).as_posix()):hashlib.sha256(f.read_bytes()).hexdigest() for f in [*src.glob("*"),*(ROOT/"src/boot_probe").glob("*"),ROOT/"src/natartos_loader.c",*(ROOT/"tests/boot_activate").glob("*"),*Path(__file__).resolve().parent.glob("*.py")] if f.is_file()}}
