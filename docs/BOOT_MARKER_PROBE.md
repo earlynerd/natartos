@@ -143,7 +143,20 @@ hash-check the complete forwarding pair, and establish how the original can be
 put back using access that actually works. A partition copy is not a tested
 restore procedure. The marker should be prepared independently of activation.
 
-Keep battery power through the immediate UI/GPS check and have the owner
-available to observe it. A fresh record alone cannot validate normal GPS,
-display/input recovery, or flight operation. SELinux should retain its existing
-state throughout this marker-only test.
+Keep battery power through the immediate UI check and have the owner available
+to confirm the normal display and controls. Do not depend on the owner knowing
+a goggles-side GPS feature or interpreting an aircraft satellite indicator.
+
+Compare the stock service's internal GNSS startup results before and after the
+test, where the existing logs are accessible, and check that the service remains
+running without repeated restarts. The inspected consumer logs the getter
+interface's initialization and start return codes. Preserve those baseline
+results rather than assuming a particular return code proves success. If the
+logs cannot be read in the unchanged security state, record that verification
+gap instead of treating responsive menus as evidence of GNSS health.
+
+Successful initialization/start is distinct from receiving a satellite position
+fix. The first marker test need not establish a fix, but must retain that limit
+in its results. A fresh marker alone cannot validate GPS, display/input recovery
+or flight operation. SELinux should retain its existing state throughout this
+marker-only test.
