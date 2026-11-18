@@ -7,9 +7,11 @@ Natartos, enable ADB, change SELinux, access physical memory, launch processes
 or modify GPS callbacks. The normal release and installer do not include it.
 
 **Status:** built and tested with authored fixtures on Linux ARM64 and x86-64;
-the production library also passed an isolated Android-linker smoke test using
-a supplied Android 9 linker/libdl and an authored stock fixture. No installation,
-cold boot or real GPS operation has been tested on goggles.
+the production library also passed an isolated Android-linker smoke test. A
+[controlled device service test](BOOT_MARKER_BENCH_2026-11-17.md) produced a
+marker in `dji_services` with SELinux already permissive, after which the
+original GPS library was restored. Cold boot, enforcing mode and a satellite
+position fix remain unvalidated.
 
 ## ABI and paths
 
