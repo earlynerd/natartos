@@ -42,10 +42,24 @@ See [SECURITY.md](SECURITY.md) for the trust model.
 | `mute` | Audio Control | tweak | no | untested |
 | `input` | Key Injection | hook | no | experimental |
 | `splash` | Custom Splash | theme | no | in progress |
+| `sd_apps` | SD Apps | app | no | in progress |
 
 Mods are opt-in — you choose which to install. Each mod is a standalone `.so`
 loaded by the loader. To write your own, see [MOD_SPEC.md](MOD_SPEC.md) and the
 starter [mods/template](mods/template).
+
+### SD-card applications (development preview)
+
+The optional SD Apps mod adds a More-menu entry for each static ARM64 app in
+`natartos/apps` on the card. A standalone runner validates packages, stages a
+verified internal copy, keeps saves separate, and supervises app/display exit.
+The development build includes a graphical Hello example. Follow the
+[runner guide](docs/SD_APP_RUNNER.md) to install the matched runner, overlay,
+and menu mods.
+SD artifacts are built separately from release packaging, and the default
+Toolya installer does not yet include them. An active Natartos session is
+required; automatic boot activation is independent of this feature.
+With SD Apps enabled, a slow card can add about five seconds to startup.
 
 ### Menu architecture
 
@@ -123,6 +137,8 @@ cd src && make                   # builds natartos_loader.so
 
 ## Documentation
 
+- [SD app runner](docs/SD_APP_RUNNER.md) — manual setup, package format,
+  display/input API, and tests.
 - [MOD_SPEC.md](MOD_SPEC.md) — mod descriptor and how to write a mod
 - [mods/template](mods/template) — starter template for your own mod
 - [mods/menu/RE_MENU.md](mods/menu/RE_MENU.md) — menu injection reverse-engineering notes
