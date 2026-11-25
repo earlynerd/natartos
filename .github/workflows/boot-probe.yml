@@ -11,6 +11,9 @@ on:
 permissions:
   contents: read
 
+permissions:
+  contents: read
+
 jobs:
   fixtures-and-cross-build:
     runs-on: ubuntu-latest
